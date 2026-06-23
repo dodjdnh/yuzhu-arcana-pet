@@ -1,6 +1,6 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { PhysicalPosition, getCurrentWindow } from '@tauri-apps/api/window'
 import { Application, Assets, Sprite, type Texture } from 'pixi.js'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { ParticleKind } from './ParticleLayer'
 import { resolveManifestState, resolveSkin } from './manifest'
 import type { PetManifest, RenderablePetState, SpriteFrameSet } from './manifest'
@@ -16,8 +16,10 @@ interface PetStageProps {
   onPetClick?: () => void
   onPetDragStart?: () => void
   onPetDragEnd?: () => void
+  onPetContextMenu?: (x: number, y: number) => void
   onStateParticle?: (kind: ParticleKind) => void
   idleBehavior?: IdleBehaviorName
+  showInteractionBounds?: boolean
 }
 
 type TextureMap = Record<string, Texture>
@@ -97,10 +99,13 @@ export function PetStage({
   onPetClick,
   onPetDragStart,
   onPetDragEnd,
+  onPetContextMenu,
   onStateParticle,
   idleBehavior = 'none',
+  showInteractionBounds = false,
 }: PetStageProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
+  const canvasHostRef = useRef<HTMLDivElement | null>(null)
   const appRef = useRef<Application | null>(null)
   const spriteRef = useRef<Sprite | null>(null)
   const shadowSpriteRef = useRef<Sprite | null>(null)
@@ -112,13 +117,25 @@ export function PetStage({
   const hoverAmountRef = useRef(0)
   const transitionStartRef = useRef(0)
   const thinkingParticleMsRef = useRef(0)
+  const dragFrameRef = useRef<number | null>(null)
   const onPetHoverChangeRef = useRef(onPetHoverChange)
   const onPetClickRef = useRef(onPetClick)
   const onPetDragStartRef = useRef(onPetDragStart)
   const onPetDragEndRef = useRef(onPetDragEnd)
+  const onPetContextMenuRef = useRef(onPetContextMenu)
   const onStateParticleRef = useRef(onStateParticle)
   const blinkOpenTimerRef = useRef<number | null>(null)
   const blinkScheduleTimerRef = useRef<number | null>(null)
+  const dragSessionRef = useRef<{
+    pointerId: number
+    startClientX: number
+    startClientY: number
+    startWindowX: number
+    startWindowY: number
+    dragging: boolean
+    latestClientX: number
+    latestClientY: number
+  } | null>(null)
 
   const clearBlinkTimers = () => {
     if (blinkOpenTimerRef.current !== null) {
@@ -131,11 +148,19 @@ export function PetStage({
     }
   }
 
+  const cancelDragFrame = () => {
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current)
+      dragFrameRef.current = null
+    }
+  }
+
   useEffect(() => {
     onPetHoverChangeRef.current = onPetHoverChange
     onPetClickRef.current = onPetClick
     onPetDragStartRef.current = onPetDragStart
     onPetDragEndRef.current = onPetDragEnd
+    onPetContextMenuRef.current = onPetContextMenu
     onStateParticleRef.current = onStateParticle
   })
 
@@ -192,9 +217,9 @@ export function PetStage({
       const latestSprite = spriteRef.current
       const latestTextures = texturesRef.current
       if (
-          desiredStateRef.current !== 'idle' ||
-          idleBehaviorRef.current === 'long_blink' ||
-          !latestSprite ||
+        desiredStateRef.current !== 'idle' ||
+        idleBehaviorRef.current === 'long_blink' ||
+        !latestSprite ||
         !latestTextures?.['idle:open'] ||
         !latestTextures['idle:closed']
       ) {
@@ -244,12 +269,14 @@ export function PetStage({
   }, [idleBehavior, state])
 
   useEffect(() => {
-    const currentHost = hostRef.current
-    if (!(currentHost instanceof HTMLDivElement)) {
+    const stageHost = canvasHostRef.current
+    const interactionHost = hostRef.current
+    if (!(stageHost instanceof HTMLDivElement) || !(interactionHost instanceof HTMLDivElement)) {
       return
     }
+    const canvasContainer = stageHost
+    const stageContainer = interactionHost
 
-    const stageHost = currentHost
     const skin = resolveSkin(manifest)
     const idleState = skin.states.idle
     if (!idleState?.open) {
@@ -259,7 +286,6 @@ export function PetStage({
 
     let disposed = false
     let resizeObserver: ResizeObserver | null = null
-    let cleanupCanvasEvents = () => {}
 
     const applyLayerTexture = (texture: Texture) => {
       const sprite = spriteRef.current
@@ -283,7 +309,7 @@ export function PetStage({
       }
 
       const maxHeightScale =
-        (stageHost.clientHeight * petConfig.layout.spriteHeightRatio) /
+        (stageContainer.clientHeight * petConfig.layout.spriteHeightRatio) /
         sprite.texture.height
       const configuredScale = petConfig.appearance.defaultScale || manifest.default_scale
       const renderScale = Math.min(configuredScale * scale, maxHeightScale)
@@ -294,8 +320,8 @@ export function PetStage({
         }
 
         layer.anchor.set(manifest.anchor.x, manifest.anchor.y)
-        layer.x = stageHost.clientWidth * petConfig.layout.spriteAnchorXRatio
-        layer.y = stageHost.clientHeight - petConfig.layout.spriteBaselineOffset
+        layer.x = stageContainer.clientWidth * petConfig.layout.spriteAnchorXRatio
+        layer.y = stageContainer.clientHeight - petConfig.layout.spriteBaselineOffset
         layer.scale.set(renderScale)
       }
     }
@@ -310,7 +336,7 @@ export function PetStage({
           autoDensity: true,
           backgroundAlpha: 0,
           resolution: getRenderResolution(),
-          resizeTo: stageHost,
+          resizeTo: stageContainer,
         })
 
         const { loadedCount, textures } = await loadTextureSet(skin.states)
@@ -321,57 +347,12 @@ export function PetStage({
 
         appRef.current = nextApp
         texturesRef.current = textures
-        stageHost.replaceChildren(nextApp.canvas)
-        nextApp.canvas.setAttribute('data-tauri-drag-region', 'true')
+        canvasContainer.replaceChildren(nextApp.canvas)
         nextApp.canvas.style.width = '100%'
         nextApp.canvas.style.height = '100%'
         nextApp.canvas.style.touchAction = 'none'
-        nextApp.canvas.style.cursor = 'grab'
-
-        let dragStarted = false
-        const handlePointerEnter = () => {
-          hoveredRef.current = true
-          onPetHoverChangeRef.current?.(true)
-        }
-        const handlePointerLeave = () => {
-          hoveredRef.current = false
-          onPetHoverChangeRef.current?.(false)
-        }
-        const handlePointerDown = (event: PointerEvent) => {
-          if (event.button !== 0) {
-            return
-          }
-
-          dragStarted = true
-          onPetDragStartRef.current?.()
-          getCurrentWindow().startDragging().catch((error: unknown) => {
-            console.warn('Failed to start window dragging.', error)
-          })
-        }
-        const handlePointerUp = () => {
-          if (!dragStarted) {
-            return
-          }
-
-          dragStarted = false
-          onPetDragEndRef.current?.()
-        }
-        const handleClick = () => {
-          onPetClickRef.current?.()
-        }
-
-        nextApp.canvas.addEventListener('pointerenter', handlePointerEnter)
-        nextApp.canvas.addEventListener('pointerleave', handlePointerLeave)
-        nextApp.canvas.addEventListener('pointerdown', handlePointerDown)
-        nextApp.canvas.addEventListener('click', handleClick)
-        window.addEventListener('pointerup', handlePointerUp)
-        cleanupCanvasEvents = () => {
-          nextApp.canvas.removeEventListener('pointerenter', handlePointerEnter)
-          nextApp.canvas.removeEventListener('pointerleave', handlePointerLeave)
-          nextApp.canvas.removeEventListener('pointerdown', handlePointerDown)
-          nextApp.canvas.removeEventListener('click', handleClick)
-          window.removeEventListener('pointerup', handlePointerUp)
-        }
+        nextApp.canvas.style.pointerEvents = 'none'
+        nextApp.canvas.style.imageRendering = 'auto'
 
         const shadowSprite = new Sprite(textures['idle:open'])
         const glowSprite = new Sprite(textures['idle:open'])
@@ -393,7 +374,7 @@ export function PetStage({
         resizeObserver = new ResizeObserver(() => {
           resizeSprite()
         })
-        resizeObserver.observe(stageHost)
+        resizeObserver.observe(stageContainer)
 
         let elapsed = 0
         nextApp.ticker.add((ticker) => {
@@ -405,12 +386,12 @@ export function PetStage({
           }
 
           const maxHeightScale =
-            (stageHost.clientHeight * petConfig.layout.spriteHeightRatio) /
+            (stageContainer.clientHeight * petConfig.layout.spriteHeightRatio) /
             latestSprite.texture.height
           const configuredScale = petConfig.appearance.defaultScale || manifest.default_scale
           const renderScale = Math.min(configuredScale * scale, maxHeightScale)
-          const baseX = stageHost.clientWidth * petConfig.layout.spriteAnchorXRatio
-          const baseY = stageHost.clientHeight - petConfig.layout.spriteBaselineOffset
+          const baseX = stageContainer.clientWidth * petConfig.layout.spriteAnchorXRatio
+          const baseY = stageContainer.clientHeight - petConfig.layout.spriteBaselineOffset
           const stateNow = desiredStateRef.current
           const idleBehaviorNow = idleBehaviorRef.current
           const hoverTarget = hoveredRef.current ? 1 : 0
@@ -578,17 +559,172 @@ export function PetStage({
     return () => {
       disposed = true
       clearBlinkTimers()
-      cleanupCanvasEvents()
-      resizeObserver?.disconnect()
+      cancelDragFrame()
+      hoveredRef.current = false
+      onPetHoverChangeRef.current?.(false)
       spriteRef.current = null
       shadowSpriteRef.current = null
       glowSpriteRef.current = null
       texturesRef.current = null
+      resizeObserver?.disconnect()
       appRef.current?.destroy(true, { children: true })
       appRef.current = null
-      stageHost.replaceChildren()
+      canvasContainer.replaceChildren()
     }
   }, [manifest, onAssetStatusChange, scale])
 
-  return <div ref={hostRef} className="pet-stage" data-tauri-drag-region="true" />
+  useEffect(() => {
+    return () => {
+      cancelDragFrame()
+    }
+  }, [])
+
+  const scheduleDragMove = () => {
+    if (dragFrameRef.current !== null) {
+      return
+    }
+
+    dragFrameRef.current = window.requestAnimationFrame(() => {
+      dragFrameRef.current = null
+      const session = dragSessionRef.current
+      if (!session?.dragging) {
+        return
+      }
+
+      const nextX = Math.round(
+        session.startWindowX + (session.latestClientX - session.startClientX),
+      )
+      const nextY = Math.round(
+        session.startWindowY + (session.latestClientY - session.startClientY),
+      )
+
+      void getCurrentWindow().setPosition(new PhysicalPosition(nextX, nextY))
+    })
+  }
+
+  const handlePointerEnter = () => {
+    hoveredRef.current = true
+    onPetHoverChangeRef.current?.(true)
+  }
+
+  const handlePointerLeave = () => {
+    if (dragSessionRef.current?.dragging) {
+      return
+    }
+
+    hoveredRef.current = false
+    onPetHoverChangeRef.current?.(false)
+  }
+
+  const handlePointerDown = async (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return
+    }
+
+    event.preventDefault()
+    const currentWindow = getCurrentWindow()
+    const outerPosition = await currentWindow.outerPosition()
+    dragSessionRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startWindowX: outerPosition.x,
+      startWindowY: outerPosition.y,
+      dragging: false,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const session = dragSessionRef.current
+    if (!session || session.pointerId !== event.pointerId) {
+      return
+    }
+
+    session.latestClientX = event.clientX
+    session.latestClientY = event.clientY
+
+    const deltaX = session.latestClientX - session.startClientX
+    const deltaY = session.latestClientY - session.startClientY
+    const distance = Math.hypot(deltaX, deltaY)
+    if (!session.dragging && distance >= petConfig.interaction.dragStartThresholdPx) {
+      session.dragging = true
+      hoveredRef.current = true
+      onPetDragStartRef.current?.()
+    }
+
+    if (session.dragging) {
+      scheduleDragMove()
+    }
+  }
+
+  const finishPointerSession = (
+    pointerId: number,
+    currentTarget: HTMLDivElement,
+    triggerClick: boolean,
+  ) => {
+    const session = dragSessionRef.current
+    if (!session || session.pointerId !== pointerId) {
+      return
+    }
+
+    dragSessionRef.current = null
+    cancelDragFrame()
+    if (currentTarget.hasPointerCapture(pointerId)) {
+      currentTarget.releasePointerCapture(pointerId)
+    }
+
+    if (session.dragging) {
+      onPetDragEndRef.current?.()
+      return
+    }
+
+    if (triggerClick) {
+      onPetClickRef.current?.()
+    }
+  }
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return
+    }
+
+    event.preventDefault()
+    finishPointerSession(event.pointerId, event.currentTarget, true)
+  }
+
+  const handlePointerCancel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    finishPointerSession(event.pointerId, event.currentTarget, false)
+  }
+
+  const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    onPetContextMenuRef.current?.(event.clientX, event.clientY)
+  }
+
+  const hitbox = petConfig.interaction.hitbox
+
+  return (
+    <div ref={hostRef} className="pet-stage">
+      <div ref={canvasHostRef} className="pet-stage__canvas" />
+      <div
+        className={`pet-hitbox${showInteractionBounds ? ' pet-hitbox--debug' : ''}`}
+        style={{
+          left: `${hitbox.leftRatio * 100}%`,
+          top: `${hitbox.topRatio * 100}%`,
+          width: `${hitbox.widthRatio * 100}%`,
+          height: `${hitbox.heightRatio * 100}%`,
+        }}
+        onContextMenu={handleContextMenu}
+        onPointerCancel={handlePointerCancel}
+        onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      />
+    </div>
+  )
 }

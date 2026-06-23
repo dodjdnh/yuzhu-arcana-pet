@@ -254,9 +254,12 @@ function App() {
           screenHeight * petConfig.layout.screenHeightRatio * nextScale,
         )
         const nextWidth = Math.round(
-          Math.max(
-            petConfig.layout.fallbackWindowWidth * nextScale,
-            Math.min(360, nextHeight * 0.78),
+          Math.min(
+            petConfig.layout.maxWindowWidth * nextScale,
+            Math.max(
+              petConfig.layout.minWindowWidth * nextScale,
+              nextHeight * petConfig.layout.windowWidthRatio,
+            ),
           ),
         )
         const defaultPosition = {
@@ -793,20 +796,18 @@ function App() {
     }, settleDelay)
   }
 
-  const handleContextMenu = (event: React.MouseEvent<HTMLElement>) => {
-    event.preventDefault()
-
+  const openContextMenu = (x: number, y: number) => {
     const nextX = Math.max(
       CONTEXT_MENU_MARGIN,
       Math.min(
-        event.clientX,
+        x,
         window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_MARGIN,
       ),
     )
     const nextY = Math.max(
       CONTEXT_MENU_MARGIN,
       Math.min(
-        event.clientY,
+        y,
         window.innerHeight - CONTEXT_MENU_HEIGHT - CONTEXT_MENU_MARGIN,
       ),
     )
@@ -878,7 +879,6 @@ function App() {
   return (
     <main
       className="app-shell"
-      onContextMenu={handleContextMenu}
       style={
         {
           '--bubble-max-width': `${petConfig.bubble.maxWidth * uiScale}px`,
@@ -1081,11 +1081,13 @@ function App() {
               state={interactionVisualState ?? controllerState.visualState}
               scale={uiScale}
               idleBehavior={idleBehaviorName}
+              showInteractionBounds={debugPanelOpen}
               onAssetStatusChange={setAssetStatus}
               onPetHoverChange={handlePetHover}
               onPetClick={handlePetClick}
               onPetDragStart={handlePetDragStart}
               onPetDragEnd={handlePetDragEnd}
+              onPetContextMenu={openContextMenu}
               onStateParticle={(kind) => {
                 if (!particleEnabled) {
                   return
