@@ -13,7 +13,7 @@
 ## Features
 
 - 基于 `React + Vite + Tauri` 的桌宠客户端
-- 基于精选立绘素材的状态表现与气泡渲染
+- 基于本地导入角色素材的状态表现与气泡渲染
 - 支持 `idle`、`thinking`、`speaking`、`error` 以及扩展情绪状态
 - AstrBot 侧通过本地 WebSocket 广播思考态、回复态和错误态
 - 轻量文本规则驱动的回复情绪识别
@@ -66,7 +66,22 @@ npm install
 npm run build
 ```
 
-### 3. Enable the AstrBot bridge plugin
+### 3. Import local character assets
+
+本仓库不分发 `Type-Moon / 魔法使之夜 / 久远寺有珠` 相关角色素材。  
+如果你要在本地看到完整桌宠立绘，需要自行准备合法获得的本地素材，并执行：
+
+```powershell
+.\tools\import_alice_assets.ps1 -SourceDir "C:\path\to\your\local\sprites"
+```
+
+脚本会只复制少量已选定的素材到：
+
+`apps/desktop-pet/public/assets/alice/skins/default_black/`
+
+并在缺少本地 `manifest.json` 时，基于 `manifest.example.json` 自动生成本地运行文件。
+
+### 4. Enable the AstrBot bridge plugin
 
 把 `plugins/astrbot_plugin_desktop_pet_bridge` 放入 AstrBot 插件目录，并确保 Python 环境满足依赖：
 
@@ -78,8 +93,9 @@ pip install websockets
 
 - Host: `127.0.0.1`
 - Port: `17321`
+- WebSocket: `ws://127.0.0.1:17321`
 
-### 4. Prepare local AstrBot runtime
+### 5. Prepare local AstrBot runtime
 
 如果需要使用当前项目整理过的本地运行时准备逻辑，可执行：
 
@@ -118,6 +134,13 @@ pip install websockets
 - `surprised`
 - `error`
 
+## Asset Copyright Notice
+
+- 本仓库只公开分发代码、配置模板和导入脚本。
+- 本仓库不提供任何 `Type-Moon`、`魔法使之夜`、`久远寺有珠` 或其他第三方角色图片、游戏资源、商标或版权素材。
+- `apps/desktop-pet/public/assets/alice/manifest.example.json` 只是本地素材结构模板。
+- 实际使用素材时，请自行确认来源、版权和使用许可。
+
 ## Current Scope
 
 当前仓库重点覆盖的是“桌宠表现层”和“AstrBot 到桌宠的桥接链路”，尤其包括：
@@ -141,17 +164,19 @@ pip install websockets
 
 - 本地运行时数据库
 - 知识库原始数据
+- 第三方角色图片素材
 - 构建产物
 - 日志文件
 - 机器缓存
 - 本地敏感配置或凭据
 
+## License
+
+本仓库代码使用 [MIT](./LICENSE) 许可。  
+但该许可仅覆盖本仓库中的代码与文本文件，不覆盖任何第三方角色图片、游戏资源、商标或版权素材。
+
 ## Notes
 
 - 当前仓库是关键代码整理版，不保证开箱即用地还原完整本地环境。
 - 若要完整复现实验环境，还需要你自己的 AstrBot 运行时、配置、知识库和素材管理约束。
-- 若后续继续公开化整理，建议再补：
-  - 完整安装说明
-  - AstrBot 集成示例
-  - 桌宠状态流转图
-  - 配置文件样例
+- 角色素材相关说明请见 `apps/desktop-pet/public/assets/alice/README.md`。

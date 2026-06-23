@@ -15,3 +15,11 @@ __pycache__/
 *.b64
 .DS_Store
 Thumbs.db
+apps/desktop-pet/public/assets/alice/skins/**/*.webp
+apps/desktop-pet/public/assets/alice/skins/**/*.png
+apps/desktop-pet/public/assets/alice/skins/**/*.jpg
+apps/desktop-pet/public/assets/alice/skins/**/*.jpeg
+apps/desktop-pet/public/assets/alice/manifest.json
+!apps/desktop-pet/public/assets/alice/skins/**/.gitkeep
+!apps/desktop-pet/public/assets/alice/README.md
+!apps/desktop-pet/public/assets/alice/manifest.example.json

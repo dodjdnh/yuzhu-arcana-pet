@@ -1,73 +1,73 @@
-# React + TypeScript + Vite
+# Desktop Pet Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+这是桌宠客户端子项目，使用 `Tauri + React + TypeScript + PixiJS` 构建。
 
-Currently, two official plugins are available:
+## Capabilities
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 桌宠角色渲染
+- 思考态、回复态、错误态气泡
+- 基于状态机的视觉状态切换
+- 与本地 AstrBot bridge 的 WebSocket 联动
 
-## React Compiler
+## Requirements
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Node.js
+- npm
+- Rust / Tauri 构建环境
 
-## Expanding the ESLint configuration
+## Development
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+安装依赖：
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+启动 Tauri 开发模式：
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+npm run tauri:dev
 ```
+
+如果只调试前端：
+
+```powershell
+npm run dev
+```
+
+## Build
+
+构建前端：
+
+```powershell
+npm run build
+```
+
+构建桌面应用：
+
+```powershell
+npm run tauri:build
+```
+
+## Bridge Endpoint
+
+默认连接的本地桥接地址：
+
+- `ws://127.0.0.1:17321`
+
+## Asset Notice
+
+本仓库不提供角色素材。  
+你需要自行准备本地素材，并运行根目录下的 `tools/import_alice_assets.ps1` 导入到：
+
+- `public/assets/alice/skins/default_black/`
+
+模板文件：
+
+- `public/assets/alice/manifest.example.json`
+
+本地运行文件：
+
+- `public/assets/alice/manifest.json`
+
+其中 `manifest.json` 为本地文件，不提交到公开仓库。
