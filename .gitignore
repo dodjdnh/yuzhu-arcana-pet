@@ -1,0 +1,17 @@
+node_modules/
+dist/
+target/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.out
+*.err
+*.db
+*.db-shm
+*.db-wal
+*.zip
+*.tar.gz
+*.b64
+.DS_Store
+Thumbs.db

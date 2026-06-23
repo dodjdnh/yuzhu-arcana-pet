@@ -1,0 +1,12 @@
+name: astrbot_plugin_desktop_pet_bridge
+desc: 把 AstrBot 回复状态通过 localhost WebSocket 广播给本机桌宠客户端。
+help: |
+  启动后监听 ws://127.0.0.1:17321。
+  会广播 bot_thinking、assistant_reply、error 等桌宠事件。
+  如果桌宠未连接，事件会被静默丢弃，不影响 AstrBot 正常回复。
+version: 0.1.0
+author: Kevin/OpenAI
+repo: https://github.com/AstrBotDevs/AstrBot
+support_platforms:
+  - telegram
+  - aiocqhttp

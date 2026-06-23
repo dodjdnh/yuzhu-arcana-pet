@@ -1,0 +1,32 @@
+{
+  "enabled": {
+    "description": "是否启用桌宠 WebSocket 桥接",
+    "type": "bool",
+    "default": true
+  },
+  "host": {
+    "description": "WebSocket server 监听地址；MVP 建议保持 127.0.0.1",
+    "type": "string",
+    "default": "127.0.0.1"
+  },
+  "port": {
+    "description": "WebSocket server 监听端口",
+    "type": "int",
+    "default": 17321
+  },
+  "token": {
+    "description": "可选连接 token；留空表示本机直接连接",
+    "type": "string",
+    "default": ""
+  },
+  "emotion_routing_enabled": {
+    "description": "是否根据最终回复文本做轻量情绪路由；关闭后固定发送 default_emotion",
+    "type": "bool",
+    "default": true
+  },
+  "default_emotion": {
+    "description": "情绪路由关闭或兜底时使用的默认 emotion",
+    "type": "string",
+    "default": "neutral"
+  }
+}

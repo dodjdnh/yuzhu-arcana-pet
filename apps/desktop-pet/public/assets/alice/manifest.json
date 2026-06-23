@@ -1,0 +1,68 @@
+{
+  "character_id": "alice",
+  "display_name": "Alice",
+  "default_skin": "default_black",
+  "default_scale": 0.14,
+  "anchor": {
+    "x": 0.5,
+    "y": 1.0
+  },
+  "skins": {
+    "default_black": {
+      "states": {
+        "idle": {
+          "open": "skins/default_black/idle_open.webp",
+          "closed": "skins/default_black/idle_closed.webp"
+        },
+        "soft_idle": {
+          "main": "skins/default_black/soft_idle.webp"
+        },
+        "speaking": {
+          "main": "skins/default_black/speaking.webp"
+        },
+        "thinking": {
+          "main": "skins/default_black/thinking.webp"
+        },
+        "attention": {
+          "main": "skins/default_black/attention.webp"
+        },
+        "magic": {
+          "main": "skins/default_black/magic.webp"
+        },
+        "cold": {
+          "main": "skins/default_black/cold.webp"
+        },
+        "annoyed": {
+          "main": "skins/default_black/annoyed.webp"
+        },
+        "cold_alt": {
+          "main": "skins/default_black/cold_alt.webp"
+        },
+        "sleepy": {
+          "main": "skins/default_black/sleepy.webp"
+        },
+        "shy": {
+          "main": "skins/default_black/shy.webp"
+        },
+        "hand_mouth": {
+          "main": "skins/default_black/hand_mouth.webp"
+        },
+        "hand_mouth_alt": {
+          "main": "skins/default_black/hand_mouth_alt.webp"
+        },
+        "calm_alt": {
+          "main": "skins/default_black/calm_alt.webp"
+        },
+        "side_glance": {
+          "main": "skins/default_black/side_glance.webp"
+        },
+        "profile_wait": {
+          "main": "skins/default_black/profile_wait.webp"
+        },
+        "bow": {
+          "main": "skins/default_black/bow.webp"
+        }
+      }
+    }
+  }
+}

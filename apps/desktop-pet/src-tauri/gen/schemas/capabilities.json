@@ -1,0 +1,1 @@
+{"main-capability":{"identifier":"main-capability","description":"Capability for the desktop pet main window","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-current-monitor","core:window:allow-set-position","core:window:allow-set-size","core:window:allow-start-dragging"]}}
