@@ -1,6 +1,6 @@
 export const petConfig = {
   layout: {
-    screenHeightRatio: 0.43,
+    screenHeightRatio: 0.35,
     fallbackWindowWidth: 240,
     fallbackWindowHeight: 390,
     rightMargin: 28,

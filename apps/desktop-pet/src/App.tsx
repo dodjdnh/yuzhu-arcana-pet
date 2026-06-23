@@ -13,13 +13,16 @@ import {
 } from './pet/ParticleLayer'
 import { PetStage } from './pet/PetStage'
 import { SpeechBubble } from './pet/SpeechBubble'
+import {
+  loadPetLocalSettings,
+  savePetLocalSettings,
+  type PetLocalSettings,
+  type PetScaleOption,
+  type PetWindowPosition,
+} from './pet/localSettings'
 import { loadManifest, type RenderablePetState } from './pet/manifest'
 import type { PetManifest } from './pet/manifest'
-import {
-  petClickLines,
-  petConfig,
-  petDragLines,
-} from './pet/petConfig'
+import { petClickLines, petConfig, petDragLines } from './pet/petConfig'
 import {
   createIdleBehaviorPlan,
   randomIdleDelayMs,
@@ -38,7 +41,62 @@ import {
   type PetControllerState,
 } from './pet/stateMachine'
 
+interface ContextMenuState {
+  x: number
+  y: number
+}
+
+const CONTEXT_MENU_WIDTH = 184
+const CONTEXT_MENU_HEIGHT = 260
+const CONTEXT_MENU_MARGIN = 12
+const POSITION_SAVE_DEBOUNCE_MS = 220
+const INVALID_WINDOW_COORDINATE_THRESHOLD = 10_000
+
+function isPersistableWindowPosition(
+  position: PetWindowPosition | null,
+): position is PetWindowPosition {
+  if (!position) {
+    return false
+  }
+
+  return (
+    Number.isFinite(position.x) &&
+    Number.isFinite(position.y) &&
+    Math.abs(position.x) < INVALID_WINDOW_COORDINATE_THRESHOLD &&
+    Math.abs(position.y) < INVALID_WINDOW_COORDINATE_THRESHOLD
+  )
+}
+
+function isReasonableRestorePosition(
+  position: PetWindowPosition | null,
+  bounds: {
+    screenX: number
+    screenY: number
+    screenWidth: number
+    screenHeight: number
+    windowWidth: number
+    windowHeight: number
+  },
+) {
+  if (!isPersistableWindowPosition(position)) {
+    return false
+  }
+
+  const minVisibleWidth = Math.min(96, bounds.windowWidth * 0.4)
+  const minVisibleHeight = Math.min(96, bounds.windowHeight * 0.4)
+
+  return (
+    position.x <= bounds.screenX + bounds.screenWidth - minVisibleWidth &&
+    position.x + bounds.windowWidth >= bounds.screenX + minVisibleWidth &&
+    position.y <= bounds.screenY + bounds.screenHeight - minVisibleHeight &&
+    position.y + bounds.windowHeight >= bounds.screenY + minVisibleHeight
+  )
+}
+
 function App() {
+  const initialSettingsRef = useRef<PetLocalSettings>(loadPetLocalSettings())
+  const initialSettings = initialSettingsRef.current
+
   const [manifest, setManifest] = useState<PetManifest | null>(null)
   const [assetStatus, setAssetStatus] = useState('Loading manifest...')
   const [socketStatus, setSocketStatus] =
@@ -48,8 +106,13 @@ function App() {
   )
   const [runtimeMessage, setRuntimeMessage] = useState<string | null>(null)
   const [debugPanelOpen, setDebugPanelOpen] = useState<boolean>(
-    petConfig.debug.showPanelByDefault,
+    initialSettings.debugPanelOpen,
   )
+  const [particleEnabled, setParticleEnabled] = useState<boolean>(
+    initialSettings.particleEnabled,
+  )
+  const [uiScale, setUiScale] = useState<PetScaleOption>(initialSettings.scale)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [transientBubble, setTransientBubble] = useState<{
     text: string
     tone: 'reply' | 'error'
@@ -72,12 +135,18 @@ function App() {
   const interactionStateTimerRef = useRef<number | null>(null)
   const idleActionTimerRef = useRef<number | null>(null)
   const idleBehaviorTimerRef = useRef<number | null>(null)
+  const positionPersistTimerRef = useRef<number | null>(null)
   const lastClickAtRef = useRef(0)
   const lastDragEndAtRef = useRef(0)
   const lastSocketTransitionAtRef = useRef(0)
   const lastIdleMurmurAtRef = useRef(0)
   const draggingRef = useRef(false)
   const particleIdRef = useRef(0)
+  const uiScaleRef = useRef<PetScaleOption>(initialSettings.scale)
+  const savedWindowPositionRef = useRef<PetWindowPosition | null>(
+    initialSettings.windowPosition,
+  )
+  const windowLayoutReadyRef = useRef(false)
 
   const clearSettleTimer = () => {
     if (settleTimerRef.current !== null) {
@@ -114,27 +183,150 @@ function App() {
     }
   }
 
+  const clearPositionPersistTimer = () => {
+    if (positionPersistTimerRef.current !== null) {
+      window.clearTimeout(positionPersistTimerRef.current)
+      positionPersistTimerRef.current = null
+    }
+  }
+
+  const persistLocalSettings = useCallback(
+    (nextWindowPosition = savedWindowPositionRef.current) => {
+      savePetLocalSettings({
+        debugPanelOpen,
+        particleEnabled,
+        scale: uiScale,
+        windowPosition: nextWindowPosition,
+      })
+    },
+    [debugPanelOpen, particleEnabled, uiScale],
+  )
+
+  const persistWindowPosition = useCallback(
+    (position: PetWindowPosition | null) => {
+      savedWindowPositionRef.current = position
+      persistLocalSettings(position)
+    },
+    [persistLocalSettings],
+  )
+
+  const saveWindowPositionFromPhysical = useCallback(
+    async (physicalX: number, physicalY: number) => {
+      try {
+        const currentWindow = getCurrentWindow()
+        const scaleFactor = await currentWindow.scaleFactor()
+        const logicalPosition = {
+          x: Math.round(physicalX / scaleFactor),
+          y: Math.round(physicalY / scaleFactor),
+        }
+
+        if (!isPersistableWindowPosition(logicalPosition)) {
+          return
+        }
+
+        persistWindowPosition(logicalPosition)
+      } catch (error) {
+        console.warn('Failed to persist window position.', error)
+      }
+    },
+    [persistWindowPosition],
+  )
+
+  const applyWindowLayout = useCallback(
+    async (
+      nextScale: PetScaleOption,
+      options?: {
+        resetToDefault?: boolean
+      },
+    ) => {
+      try {
+        const monitor = await currentMonitor()
+        if (!monitor) {
+          return
+        }
+
+        const scaleFactor = monitor.scaleFactor || 1
+        const screenWidth = monitor.size.width / scaleFactor
+        const screenHeight = monitor.size.height / scaleFactor
+        const screenX = monitor.position.x / scaleFactor
+        const screenY = monitor.position.y / scaleFactor
+        const nextHeight = Math.round(
+          screenHeight * petConfig.layout.screenHeightRatio * nextScale,
+        )
+        const nextWidth = Math.round(
+          Math.max(
+            petConfig.layout.fallbackWindowWidth * nextScale,
+            Math.min(360, nextHeight * 0.78),
+          ),
+        )
+        const defaultPosition = {
+          x: Math.round(
+            screenX + screenWidth - nextWidth - petConfig.layout.rightMargin,
+          ),
+          y: Math.round(
+            screenY + screenHeight - nextHeight - petConfig.layout.bottomMargin,
+          ),
+        }
+        const canRestoreSavedPosition = isReasonableRestorePosition(
+          savedWindowPositionRef.current,
+          {
+            screenX,
+            screenY,
+            screenWidth,
+            screenHeight,
+            windowWidth: nextWidth,
+            windowHeight: nextHeight,
+          },
+        )
+        const targetPosition: PetWindowPosition =
+          options?.resetToDefault || !canRestoreSavedPosition
+            ? defaultPosition
+            : (savedWindowPositionRef.current ?? defaultPosition)
+        const currentWindow = getCurrentWindow()
+
+        await currentWindow.setSize(new LogicalSize(nextWidth, nextHeight))
+        await currentWindow.setPosition(
+          new LogicalPosition(targetPosition.x, targetPosition.y),
+        )
+
+        if (options?.resetToDefault || !canRestoreSavedPosition) {
+          persistWindowPosition(targetPosition)
+        }
+      } catch (error) {
+        console.warn('Failed to apply desktop pet window layout.', error)
+      }
+    },
+    [persistWindowPosition],
+  )
+
+  const resetWindowPosition = useCallback(async () => {
+    await applyWindowLayout(uiScaleRef.current, { resetToDefault: true })
+  }, [applyWindowLayout])
+
   const cancelIdleBehavior = useCallback(() => {
     clearIdleBehaviorTimer()
     setIdleBehaviorName('none')
     setInteractionVisualState(null)
   }, [])
 
-  const showTransientBubble = useCallback((
-    text: string,
-    duration: number = petConfig.bubble.interactionDurationMs,
-  ) => {
-    if (transientBubbleTimerRef.current !== null) {
-      window.clearTimeout(transientBubbleTimerRef.current)
-      transientBubbleTimerRef.current = null
-    }
+  const showTransientBubble = useCallback(
+    (
+      text: string,
+      duration: number = petConfig.bubble.interactionDurationMs,
+    ) => {
+      if (transientBubbleTimerRef.current !== null) {
+        window.clearTimeout(transientBubbleTimerRef.current)
+        transientBubbleTimerRef.current = null
+      }
 
-    setTransientBubble({ text, tone: 'reply' })
-    transientBubbleTimerRef.current = window.setTimeout(() => {
-      setTransientBubble(null)
-      transientBubbleTimerRef.current = null
-    }, duration)
-  }, [])
+      setTransientBubble({ text, tone: 'reply' })
+      transientBubbleTimerRef.current = window.setTimeout(() => {
+        setTransientBubble(null)
+        transientBubbleTimerRef.current = null
+      }, duration)
+    },
+    [],
+  )
 
   const spawnParticles = (
     kind: ParticleKind,
@@ -142,7 +334,11 @@ function App() {
     x = window.innerWidth * 0.55,
     y = window.innerHeight * 0.36,
   ) => {
-    if (!petConfig.appearance.enableParticles || !petConfig.appearance.enableStars) {
+    if (
+      !particleEnabled ||
+      !petConfig.appearance.enableParticles ||
+      !petConfig.appearance.enableStars
+    ) {
       return
     }
 
@@ -161,36 +357,6 @@ function App() {
     window.setTimeout(() => {
       setParticleBursts((current) => current.filter((burst) => burst.id !== id))
     }, 1300)
-  }
-
-  const dockWindowToBottomRight = async () => {
-    try {
-      const monitor = await currentMonitor()
-      if (!monitor) {
-        return
-      }
-
-      const scaleFactor = monitor.scaleFactor || 1
-      const screenWidth = monitor.size.width / scaleFactor
-      const screenHeight = monitor.size.height / scaleFactor
-      const screenX = monitor.position.x / scaleFactor
-      const screenY = monitor.position.y / scaleFactor
-      const nextHeight = Math.round(screenHeight * petConfig.layout.screenHeightRatio)
-      const nextWidth = Math.round(
-        Math.max(
-          petConfig.layout.fallbackWindowWidth,
-          Math.min(320, nextHeight * 0.78),
-        ),
-      )
-      const nextX = Math.round(screenX + screenWidth - nextWidth - petConfig.layout.rightMargin)
-      const nextY = Math.round(screenY + screenHeight - nextHeight - petConfig.layout.bottomMargin)
-      const currentWindow = getCurrentWindow()
-
-      await currentWindow.setSize(new LogicalSize(nextWidth, nextHeight))
-      await currentWindow.setPosition(new LogicalPosition(nextX, nextY))
-    } catch (error) {
-      console.warn('Failed to dock pet window.', error)
-    }
   }
 
   const resetToIdle = () => {
@@ -238,6 +404,10 @@ function App() {
   }
 
   useEffect(() => {
+    persistLocalSettings()
+  }, [persistLocalSettings])
+
+  useEffect(() => {
     manifestRef.current = manifest
   }, [manifest])
 
@@ -248,6 +418,10 @@ function App() {
   useEffect(() => {
     processPetEventRef.current = processPetEvent
   })
+
+  useEffect(() => {
+    uiScaleRef.current = uiScale
+  }, [uiScale])
 
   useEffect(() => {
     let mounted = true
@@ -286,12 +460,49 @@ function App() {
       clearInteractionStateTimer()
       clearIdleActionTimer()
       clearIdleBehaviorTimer()
+      clearPositionPersistTimer()
     }
   }, [])
 
   useEffect(() => {
-    dockWindowToBottomRight()
-  }, [])
+    let cancelled = false
+    let unlisten: (() => void) | null = null
+
+    async function initWindowBehavior() {
+      await applyWindowLayout(uiScaleRef.current, {
+        resetToDefault: savedWindowPositionRef.current === null,
+      })
+      if (cancelled) {
+        return
+      }
+
+      windowLayoutReadyRef.current = true
+      unlisten = await getCurrentWindow().onMoved(({ payload }) => {
+        clearPositionPersistTimer()
+        positionPersistTimerRef.current = window.setTimeout(() => {
+          void saveWindowPositionFromPhysical(payload.x, payload.y)
+        }, POSITION_SAVE_DEBOUNCE_MS)
+      })
+    }
+
+    void initWindowBehavior()
+
+    return () => {
+      cancelled = true
+      if (unlisten) {
+        unlisten()
+      }
+      clearPositionPersistTimer()
+    }
+  }, [applyWindowLayout, saveWindowPositionFromPhysical])
+
+  useEffect(() => {
+    if (!windowLayoutReadyRef.current) {
+      return
+    }
+
+    void applyWindowLayout(uiScale)
+  }, [applyWindowLayout, uiScale])
 
   useEffect(() => {
     if (!manifest) {
@@ -313,6 +524,35 @@ function App() {
       client.disconnect()
     }
   }, [manifest])
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return
+    }
+
+    const closeMenu = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('.context-menu')) {
+        return
+      }
+
+      setContextMenu(null)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextMenu(null)
+      }
+    }
+
+    window.addEventListener('pointerdown', closeMenu)
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('pointerdown', closeMenu)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [contextMenu])
 
   const canRunIdleBehavior = useCallback((ignorePostEventQuiet = false) => {
     const now = Date.now()
@@ -553,6 +793,57 @@ function App() {
     }, settleDelay)
   }
 
+  const handleContextMenu = (event: React.MouseEvent<HTMLElement>) => {
+    event.preventDefault()
+
+    const nextX = Math.max(
+      CONTEXT_MENU_MARGIN,
+      Math.min(
+        event.clientX,
+        window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_MARGIN,
+      ),
+    )
+    const nextY = Math.max(
+      CONTEXT_MENU_MARGIN,
+      Math.min(
+        event.clientY,
+        window.innerHeight - CONTEXT_MENU_HEIGHT - CONTEXT_MENU_MARGIN,
+      ),
+    )
+
+    setContextMenu({ x: nextX, y: nextY })
+  }
+
+  const handleToggleDebug = () => {
+    setDebugPanelOpen((current) => !current)
+    setContextMenu(null)
+  }
+
+  const handleScaleChange = (nextScale: PetScaleOption) => {
+    setUiScale(nextScale)
+    setContextMenu(null)
+  }
+
+  const handleToggleParticles = () => {
+    setParticleEnabled((current) => !current)
+    setParticleBursts([])
+    setContextMenu(null)
+  }
+
+  const handleResetPosition = async () => {
+    await resetWindowPosition()
+    setContextMenu(null)
+  }
+
+  const handleExitApp = async () => {
+    setContextMenu(null)
+    try {
+      await getCurrentWindow().close()
+    } catch (error) {
+      console.warn('Failed to close desktop pet window.', error)
+    }
+  }
+
   const debugStateLabelMap: Record<string, string> = {
     idle: '待机',
     thinking: '思考中',
@@ -587,9 +878,11 @@ function App() {
   return (
     <main
       className="app-shell"
+      onContextMenu={handleContextMenu}
       style={
         {
-          '--bubble-max-width': `${petConfig.bubble.maxWidth}px`,
+          '--bubble-max-width': `${petConfig.bubble.maxWidth * uiScale}px`,
+          '--ui-scale': `${uiScale}`,
         } as CSSProperties
       }
     >
@@ -632,7 +925,15 @@ function App() {
             <span className="label">下次</span>
             <span className="value">{idleBehaviorNextLabel}</span>
           </p>
-          <p className="hint">按住角色区域可拖动窗口。</p>
+          <p>
+            <span className="label">缩放</span>
+            <span className="value">{Math.round(uiScale * 100)}%</span>
+          </p>
+          <p>
+            <span className="label">粒子</span>
+            <span className="value">{particleEnabled ? '开启' : '关闭'}</span>
+          </p>
+          <p className="hint">左键互动，拖拽移动，右键打开日常菜单。</p>
 
           <div className="debug-actions">
             <button type="button" onClick={handleSimulateThinking}>
@@ -711,33 +1012,87 @@ function App() {
 
           {runtimeMessage ? <p className="error">{runtimeMessage}</p> : null}
         </div>
-      ) : (
-        <button
-          type="button"
-          className="debug-collapsed"
-          onClick={() => setDebugPanelOpen(true)}
-          title={`连接状态：${socketStatusLabelMap[socketStatus]}`}
+      ) : null}
+
+      {contextMenu ? (
+        <div
+          className="context-menu"
+          style={
+            {
+              left: `${contextMenu.x}px`,
+              top: `${contextMenu.y}px`,
+            } as CSSProperties
+          }
         >
-          <span className={`connection-dot connection-dot--${socketStatus}`} />
-          <span className="debug-collapsed__text">调试</span>
-        </button>
-      )}
+          <button type="button" className="context-menu__item" onClick={handleToggleDebug}>
+            {debugPanelOpen ? '隐藏 debug' : '显示 debug'}
+          </button>
+          <button type="button" className="context-menu__item" onClick={handleResetPosition}>
+            重置位置
+          </button>
+          <button
+            type="button"
+            className="context-menu__item"
+            onClick={() => handleScaleChange(0.8)}
+          >
+            缩放 80%
+          </button>
+          <button
+            type="button"
+            className="context-menu__item"
+            onClick={() => handleScaleChange(1)}
+          >
+            缩放 100%
+          </button>
+          <button
+            type="button"
+            className="context-menu__item"
+            onClick={() => handleScaleChange(1.2)}
+          >
+            缩放 120%
+          </button>
+          <button type="button" className="context-menu__item" onClick={handleToggleParticles}>
+            粒子{particleEnabled ? '关' : '开'}
+          </button>
+          <button
+            type="button"
+            className="context-menu__item context-menu__item--danger"
+            onClick={handleExitApp}
+          >
+            退出
+          </button>
+        </div>
+      ) : null}
 
       <section className="pet-shell">
         {manifest && controllerState ? (
           <>
-            <ParticleLayer bursts={particleBursts} />
-            <SpeechBubble bubble={transientBubble ?? controllerState.bubble} />
+            <ParticleLayer
+              bursts={particleBursts}
+              enabled={particleEnabled}
+              scale={uiScale}
+            />
+            <SpeechBubble
+              bubble={transientBubble ?? controllerState.bubble}
+              scale={uiScale}
+            />
             <PetStage
               manifest={manifest}
               state={interactionVisualState ?? controllerState.visualState}
+              scale={uiScale}
               idleBehavior={idleBehaviorName}
               onAssetStatusChange={setAssetStatus}
               onPetHoverChange={handlePetHover}
               onPetClick={handlePetClick}
               onPetDragStart={handlePetDragStart}
               onPetDragEnd={handlePetDragEnd}
-              onStateParticle={(kind) => spawnParticles(kind, kind === 'magic' ? 2 : 1)}
+              onStateParticle={(kind) => {
+                if (!particleEnabled) {
+                  return
+                }
+
+                spawnParticles(kind, kind === 'magic' ? 2 : 1)
+              }}
             />
           </>
         ) : (

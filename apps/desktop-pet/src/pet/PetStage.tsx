@@ -10,6 +10,7 @@ import type { IdleBehaviorName } from './idleBehavior'
 interface PetStageProps {
   manifest: PetManifest
   state: RenderablePetState
+  scale?: number
   onAssetStatusChange: (status: string) => void
   onPetHoverChange?: (hovered: boolean) => void
   onPetClick?: () => void
@@ -90,6 +91,7 @@ async function loadTextureSet(states: Record<string, SpriteFrameSet>) {
 export function PetStage({
   manifest,
   state,
+  scale = 1,
   onAssetStatusChange,
   onPetHoverChange,
   onPetClick,
@@ -284,7 +286,7 @@ export function PetStage({
         (stageHost.clientHeight * petConfig.layout.spriteHeightRatio) /
         sprite.texture.height
       const configuredScale = petConfig.appearance.defaultScale || manifest.default_scale
-      const renderScale = Math.min(configuredScale, maxHeightScale)
+      const renderScale = Math.min(configuredScale * scale, maxHeightScale)
 
       for (const layer of [shadowSprite, glowSprite, sprite]) {
         if (!layer) {
@@ -406,7 +408,7 @@ export function PetStage({
             (stageHost.clientHeight * petConfig.layout.spriteHeightRatio) /
             latestSprite.texture.height
           const configuredScale = petConfig.appearance.defaultScale || manifest.default_scale
-          const renderScale = Math.min(configuredScale, maxHeightScale)
+          const renderScale = Math.min(configuredScale * scale, maxHeightScale)
           const baseX = stageHost.clientWidth * petConfig.layout.spriteAnchorXRatio
           const baseY = stageHost.clientHeight - petConfig.layout.spriteBaselineOffset
           const stateNow = desiredStateRef.current
@@ -586,7 +588,7 @@ export function PetStage({
       appRef.current = null
       stageHost.replaceChildren()
     }
-  }, [manifest, onAssetStatusChange])
+  }, [manifest, onAssetStatusChange, scale])
 
   return <div ref={hostRef} className="pet-stage" data-tauri-drag-region="true" />
 }

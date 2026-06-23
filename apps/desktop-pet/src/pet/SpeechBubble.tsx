@@ -1,11 +1,12 @@
 import type { SpeechBubbleState } from './stateMachine'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 
 interface SpeechBubbleProps {
   bubble: SpeechBubbleState | null
+  scale?: number
 }
 
-export function SpeechBubble({ bubble }: SpeechBubbleProps) {
+export function SpeechBubble({ bubble, scale = 1 }: SpeechBubbleProps) {
   const [visibleBubble, setVisibleBubble] = useState<SpeechBubbleState | null>(bubble)
   const [closing, setClosing] = useState(false)
 
@@ -49,6 +50,7 @@ export function SpeechBubble({ bubble }: SpeechBubbleProps) {
       className={`speech-bubble speech-bubble--${visibleBubble.tone}${
         closing ? ' speech-bubble--closing' : ''
       }`}
+      style={{ '--bubble-scale': scale } as CSSProperties}
     >
       <span className="speech-bubble__star speech-bubble__star--one">✦</span>
       <span className="speech-bubble__star speech-bubble__star--two">✧</span>

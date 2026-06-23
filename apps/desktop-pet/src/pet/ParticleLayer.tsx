@@ -13,6 +13,8 @@ export interface ParticleBurst {
 
 interface ParticleLayerProps {
   bursts: ParticleBurst[]
+  enabled?: boolean
+  scale?: number
 }
 
 function particleGlyph(kind: ParticleKind, index: number) {
@@ -28,13 +30,21 @@ function particleGlyph(kind: ParticleKind, index: number) {
   return index % 2 === 0 ? '✧' : '✦'
 }
 
-export function ParticleLayer({ bursts }: ParticleLayerProps) {
-  if (!petConfig.appearance.enableParticles) {
+export function ParticleLayer({
+  bursts,
+  enabled = true,
+  scale = 1,
+}: ParticleLayerProps) {
+  if (!petConfig.appearance.enableParticles || !enabled) {
     return null
   }
 
   return (
-    <div className="particle-layer" aria-hidden="true">
+    <div
+      className="particle-layer"
+      aria-hidden="true"
+      style={{ '--particle-scale': scale } as CSSProperties}
+    >
       {bursts.flatMap((burst) =>
         Array.from({ length: burst.count }, (_, index) => (
           <span
