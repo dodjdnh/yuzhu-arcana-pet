@@ -7,6 +7,16 @@
   pointer-events: none;
 }
 
+.app-shell--debug-bounds::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border: 1px dashed rgba(255, 185, 82, 0.85);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
 :root {
   --ui-scale: 1;
   --bubble-scale: 1;
@@ -224,6 +234,15 @@
 
 .speech-bubble--closing {
   animation: bubbleOut 140ms ease-in forwards;
+}
+
+.speech-bubble--debug::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 1px dashed rgba(117, 221, 179, 0.88);
+  border-radius: 22px;
+  pointer-events: none;
 }
 
 .speech-bubble__body {

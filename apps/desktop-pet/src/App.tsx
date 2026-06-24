@@ -232,6 +232,16 @@ function App() {
     [persistWindowPosition],
   )
 
+  const persistCurrentWindowPosition = useCallback(async () => {
+    try {
+      const currentWindow = getCurrentWindow()
+      const outerPosition = await currentWindow.outerPosition()
+      await saveWindowPositionFromPhysical(outerPosition.x, outerPosition.y)
+    } catch (error) {
+      console.warn('Failed to persist current desktop pet window position.', error)
+    }
+  }, [saveWindowPositionFromPhysical])
+
   const applyWindowLayout = useCallback(
     async (
       nextScale: PetScaleOption,
@@ -781,6 +791,7 @@ function App() {
   const handlePetDragEnd = () => {
     draggingRef.current = false
     lastDragEndAtRef.current = Date.now()
+    void persistCurrentWindowPosition()
     const minDelay = petConfig.interaction.dragSettleMinMs
     const maxDelay = petConfig.interaction.dragSettleMaxMs
     const settleDelay = minDelay + Math.random() * (maxDelay - minDelay)
@@ -878,7 +889,7 @@ function App() {
 
   return (
     <main
-      className="app-shell"
+      className={`app-shell${debugPanelOpen ? ' app-shell--debug-bounds' : ''}`}
       style={
         {
           '--bubble-max-width': `${petConfig.bubble.maxWidth * uiScale}px`,
@@ -1075,12 +1086,14 @@ function App() {
             <SpeechBubble
               bubble={transientBubble ?? controllerState.bubble}
               scale={uiScale}
+              debugVisible={debugPanelOpen}
             />
             <PetStage
               manifest={manifest}
               state={interactionVisualState ?? controllerState.visualState}
               scale={uiScale}
               idleBehavior={idleBehaviorName}
+              overlayInteractive={debugPanelOpen || contextMenu !== null}
               showInteractionBounds={debugPanelOpen}
               onAssetStatusChange={setAssetStatus}
               onPetHoverChange={handlePetHover}

@@ -1,4 +1,4 @@
-import { PhysicalPosition, getCurrentWindow } from '@tauri-apps/api/window'
+import { PhysicalPosition, cursorPosition, getCurrentWindow } from '@tauri-apps/api/window'
 import { Application, Assets, Sprite, type Texture } from 'pixi.js'
 import { useEffect, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { ParticleKind } from './ParticleLayer'
@@ -11,6 +11,7 @@ interface PetStageProps {
   manifest: PetManifest
   state: RenderablePetState
   scale?: number
+  overlayInteractive?: boolean
   onAssetStatusChange: (status: string) => void
   onPetHoverChange?: (hovered: boolean) => void
   onPetClick?: () => void
@@ -26,6 +27,7 @@ type TextureMap = Record<string, Texture>
 
 const MAX_RENDER_RESOLUTION = 2
 const STATE_FADE_MS = 170
+const HITBOX_POLL_INTERVAL_MS = 32
 
 function texturePath(frame: string) {
   return `/assets/alice/${frame}`
@@ -102,6 +104,7 @@ export function PetStage({
   onPetContextMenu,
   onStateParticle,
   idleBehavior = 'none',
+  overlayInteractive = false,
   showInteractionBounds = false,
 }: PetStageProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -118,6 +121,12 @@ export function PetStage({
   const transitionStartRef = useRef(0)
   const thinkingParticleMsRef = useRef(0)
   const dragFrameRef = useRef<number | null>(null)
+  const dragPollActiveRef = useRef(false)
+  const ignoreCursorEventsRef = useRef(false)
+  const hitboxPollTimerRef = useRef<number | null>(null)
+  const dragThresholdPollTimerRef = useRef<number | null>(null)
+  const dragEndSettleTimerRef = useRef<number | null>(null)
+  const nativeDragActiveRef = useRef(false)
   const onPetHoverChangeRef = useRef(onPetHoverChange)
   const onPetClickRef = useRef(onPetClick)
   const onPetDragStartRef = useRef(onPetDragStart)
@@ -128,13 +137,14 @@ export function PetStage({
   const blinkScheduleTimerRef = useRef<number | null>(null)
   const dragSessionRef = useRef<{
     pointerId: number
-    startClientX: number
-    startClientY: number
+    startScreenX: number
+    startScreenY: number
     startWindowX: number
     startWindowY: number
     dragging: boolean
-    latestClientX: number
-    latestClientY: number
+    latestScreenX: number
+    latestScreenY: number
+    dragTriggered: boolean
   } | null>(null)
 
   const clearBlinkTimers = () => {
@@ -155,6 +165,67 @@ export function PetStage({
     }
   }
 
+  const stopDragPolling = () => {
+    dragPollActiveRef.current = false
+    cancelDragFrame()
+  }
+
+  const clearDragThresholdPollTimer = () => {
+    if (dragThresholdPollTimerRef.current !== null) {
+      window.clearInterval(dragThresholdPollTimerRef.current)
+      dragThresholdPollTimerRef.current = null
+    }
+  }
+
+  const clearDragEndSettleTimer = () => {
+    if (dragEndSettleTimerRef.current !== null) {
+      window.clearTimeout(dragEndSettleTimerRef.current)
+      dragEndSettleTimerRef.current = null
+    }
+  }
+
+  const clearHitboxPollTimer = () => {
+    if (hitboxPollTimerRef.current !== null) {
+      window.clearInterval(hitboxPollTimerRef.current)
+      hitboxPollTimerRef.current = null
+    }
+  }
+
+  const setIgnoreCursorEventsSafely = async (ignore: boolean) => {
+    if (ignoreCursorEventsRef.current === ignore) {
+      return
+    }
+
+    try {
+      await getCurrentWindow().setIgnoreCursorEvents(ignore)
+      ignoreCursorEventsRef.current = ignore
+    } catch (error) {
+      console.warn('Failed to toggle ignore cursor events.', error)
+    }
+  }
+
+  const getHitboxBoundsPhysical = async () => {
+    const currentWindow = getCurrentWindow()
+    const [outerPosition, scaleFactor] = await Promise.all([
+      currentWindow.outerPosition(),
+      currentWindow.scaleFactor(),
+    ])
+    const width = Math.round(window.innerWidth * scaleFactor)
+    const height = Math.round(window.innerHeight * scaleFactor)
+    const hitbox = petConfig.interaction.hitbox
+
+    return {
+      left: outerPosition.x + Math.round(width * hitbox.leftRatio),
+      top: outerPosition.y + Math.round(height * hitbox.topRatio),
+      right:
+        outerPosition.x +
+        Math.round(width * (hitbox.leftRatio + hitbox.widthRatio)),
+      bottom:
+        outerPosition.y +
+        Math.round(height * (hitbox.topRatio + hitbox.heightRatio)),
+    }
+  }
+
   useEffect(() => {
     onPetHoverChangeRef.current = onPetHoverChange
     onPetClickRef.current = onPetClick
@@ -163,6 +234,82 @@ export function PetStage({
     onPetContextMenuRef.current = onPetContextMenu
     onStateParticleRef.current = onStateParticle
   })
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+
+    async function bindDragMoveObserver() {
+      unlisten = await getCurrentWindow().onMoved(() => {
+        if (!nativeDragActiveRef.current) {
+          return
+        }
+
+        clearDragEndSettleTimer()
+        dragEndSettleTimerRef.current = window.setTimeout(() => {
+          nativeDragActiveRef.current = false
+          clearDragEndSettleTimer()
+          if (dragSessionRef.current?.dragTriggered) {
+            onPetDragEndRef.current?.()
+          }
+          dragSessionRef.current = null
+          hoveredRef.current = false
+          onPetHoverChangeRef.current?.(false)
+        }, 180)
+      })
+    }
+
+    void bindDragMoveObserver()
+
+    return () => {
+      if (unlisten) {
+        unlisten()
+      }
+      clearDragEndSettleTimer()
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const syncWindowClickThrough = async () => {
+      if (cancelled) {
+        return
+      }
+
+      if (overlayInteractive || dragSessionRef.current !== null) {
+        await setIgnoreCursorEventsSafely(false)
+        return
+      }
+
+      try {
+        const [cursor, hitboxBounds] = await Promise.all([
+          cursorPosition(),
+          getHitboxBoundsPhysical(),
+        ])
+
+        const insideHitbox =
+          cursor.x >= hitboxBounds.left &&
+          cursor.x <= hitboxBounds.right &&
+          cursor.y >= hitboxBounds.top &&
+          cursor.y <= hitboxBounds.bottom
+
+        await setIgnoreCursorEventsSafely(!insideHitbox)
+      } catch (error) {
+        console.warn('Failed to evaluate pet hitbox click-through state.', error)
+      }
+    }
+
+    void syncWindowClickThrough()
+    hitboxPollTimerRef.current = window.setInterval(() => {
+      void syncWindowClickThrough()
+    }, HITBOX_POLL_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearHitboxPollTimer()
+      void setIgnoreCursorEventsSafely(false)
+    }
+  }, [overlayInteractive, scale, showInteractionBounds])
 
   useEffect(() => {
     desiredStateRef.current = state
@@ -559,7 +706,11 @@ export function PetStage({
     return () => {
       disposed = true
       clearBlinkTimers()
-      cancelDragFrame()
+      stopDragPolling()
+      clearHitboxPollTimer()
+      clearDragThresholdPollTimer()
+      clearDragEndSettleTimer()
+      nativeDragActiveRef.current = false
       hoveredRef.current = false
       onPetHoverChangeRef.current?.(false)
       spriteRef.current = null
@@ -575,34 +726,20 @@ export function PetStage({
 
   useEffect(() => {
     return () => {
-      cancelDragFrame()
+      stopDragPolling()
+      clearHitboxPollTimer()
+      clearDragThresholdPollTimer()
+      clearDragEndSettleTimer()
+      nativeDragActiveRef.current = false
+      void setIgnoreCursorEventsSafely(false)
     }
   }, [])
 
-  const scheduleDragMove = () => {
-    if (dragFrameRef.current !== null) {
+  const handlePointerEnter = () => {
+    if (dragSessionRef.current?.dragging) {
       return
     }
 
-    dragFrameRef.current = window.requestAnimationFrame(() => {
-      dragFrameRef.current = null
-      const session = dragSessionRef.current
-      if (!session?.dragging) {
-        return
-      }
-
-      const nextX = Math.round(
-        session.startWindowX + (session.latestClientX - session.startClientX),
-      )
-      const nextY = Math.round(
-        session.startWindowY + (session.latestClientY - session.startClientY),
-      )
-
-      void getCurrentWindow().setPosition(new PhysicalPosition(nextX, nextY))
-    })
-  }
-
-  const handlePointerEnter = () => {
     hoveredRef.current = true
     onPetHoverChangeRef.current?.(true)
   }
@@ -623,17 +760,68 @@ export function PetStage({
 
     event.preventDefault()
     const currentWindow = getCurrentWindow()
-    const outerPosition = await currentWindow.outerPosition()
+    const [outerPosition, currentCursor] = await Promise.all([
+      currentWindow.outerPosition(),
+      cursorPosition(),
+    ])
+    await setIgnoreCursorEventsSafely(false)
+    clearDragThresholdPollTimer()
+    clearDragEndSettleTimer()
+    nativeDragActiveRef.current = false
     dragSessionRef.current = {
       pointerId: event.pointerId,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
+      startScreenX: currentCursor.x,
+      startScreenY: currentCursor.y,
       startWindowX: outerPosition.x,
       startWindowY: outerPosition.y,
       dragging: false,
-      latestClientX: event.clientX,
-      latestClientY: event.clientY,
+      latestScreenX: currentCursor.x,
+      latestScreenY: currentCursor.y,
+      dragTriggered: false,
     }
+    dragThresholdPollTimerRef.current = window.setInterval(() => {
+      void (async () => {
+        const session = dragSessionRef.current
+        if (!session || session.dragTriggered) {
+          return
+        }
+
+        let currentPhysicalCursor: PhysicalPosition
+        try {
+          currentPhysicalCursor = await cursorPosition()
+        } catch (error) {
+          console.warn('Failed to read cursor position before drag activation.', error)
+          return
+        }
+
+        session.latestScreenX = currentPhysicalCursor.x
+        session.latestScreenY = currentPhysicalCursor.y
+        const deltaX = session.latestScreenX - session.startScreenX
+        const deltaY = session.latestScreenY - session.startScreenY
+        const distance = Math.hypot(deltaX, deltaY)
+        if (distance < petConfig.interaction.dragStartThresholdPx) {
+          return
+        }
+
+        session.dragTriggered = true
+        session.dragging = true
+        nativeDragActiveRef.current = true
+        clearDragThresholdPollTimer()
+        hoveredRef.current = true
+        onPetDragStartRef.current?.()
+
+        try {
+          await getCurrentWindow().startDragging()
+        } catch (error) {
+          console.warn('Failed to start native window dragging.', error)
+          nativeDragActiveRef.current = false
+          if (dragSessionRef.current?.dragTriggered) {
+            onPetDragEndRef.current?.()
+          }
+          dragSessionRef.current = null
+        }
+      })()
+    }, 16)
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
@@ -641,22 +829,6 @@ export function PetStage({
     const session = dragSessionRef.current
     if (!session || session.pointerId !== event.pointerId) {
       return
-    }
-
-    session.latestClientX = event.clientX
-    session.latestClientY = event.clientY
-
-    const deltaX = session.latestClientX - session.startClientX
-    const deltaY = session.latestClientY - session.startClientY
-    const distance = Math.hypot(deltaX, deltaY)
-    if (!session.dragging && distance >= petConfig.interaction.dragStartThresholdPx) {
-      session.dragging = true
-      hoveredRef.current = true
-      onPetDragStartRef.current?.()
-    }
-
-    if (session.dragging) {
-      scheduleDragMove()
     }
   }
 
@@ -671,12 +843,15 @@ export function PetStage({
     }
 
     dragSessionRef.current = null
-    cancelDragFrame()
+    stopDragPolling()
+    clearDragThresholdPollTimer()
     if (currentTarget.hasPointerCapture(pointerId)) {
       currentTarget.releasePointerCapture(pointerId)
     }
 
-    if (session.dragging) {
+    if (session.dragTriggered || nativeDragActiveRef.current) {
+      nativeDragActiveRef.current = false
+      clearDragEndSettleTimer()
       onPetDragEndRef.current?.()
       return
     }
