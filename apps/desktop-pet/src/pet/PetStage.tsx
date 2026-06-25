@@ -12,6 +12,19 @@ interface PetStageProps {
   state: RenderablePetState
   scale?: number
   overlayInteractive?: boolean
+  characterAnchorXRatio?: number
+  interactionHitbox?: {
+    leftRatio: number
+    topRatio: number
+    widthRatio: number
+    heightRatio: number
+  }
+  interactiveRegions?: Array<{
+    leftRatio: number
+    topRatio: number
+    widthRatio: number
+    heightRatio: number
+  }>
   onAssetStatusChange: (status: string) => void
   onPetHoverChange?: (hovered: boolean) => void
   onPetClick?: () => void
@@ -96,6 +109,9 @@ export function PetStage({
   manifest,
   state,
   scale = 1,
+  characterAnchorXRatio = petConfig.layout.spriteAnchorXRatio,
+  interactionHitbox = petConfig.interaction.hitbox,
+  interactiveRegions = [],
   onAssetStatusChange,
   onPetHoverChange,
   onPetClick,
@@ -212,17 +228,34 @@ export function PetStage({
     ])
     const width = Math.round(window.innerWidth * scaleFactor)
     const height = Math.round(window.innerHeight * scaleFactor)
-    const hitbox = petConfig.interaction.hitbox
-
     return {
-      left: outerPosition.x + Math.round(width * hitbox.leftRatio),
-      top: outerPosition.y + Math.round(height * hitbox.topRatio),
+      left: outerPosition.x + Math.round(width * interactionHitbox.leftRatio),
+      top: outerPosition.y + Math.round(height * interactionHitbox.topRatio),
       right:
         outerPosition.x +
-        Math.round(width * (hitbox.leftRatio + hitbox.widthRatio)),
+        Math.round(
+          width * (interactionHitbox.leftRatio + interactionHitbox.widthRatio),
+        ),
       bottom:
         outerPosition.y +
-        Math.round(height * (hitbox.topRatio + hitbox.heightRatio)),
+        Math.round(
+          height * (interactionHitbox.topRatio + interactionHitbox.heightRatio),
+        ),
+      }
+  }
+
+  const getWindowBoundsPhysical = async () => {
+    const currentWindow = getCurrentWindow()
+    const [outerPosition, scaleFactor] = await Promise.all([
+      currentWindow.outerPosition(),
+      currentWindow.scaleFactor(),
+    ])
+
+    return {
+      left: outerPosition.x,
+      top: outerPosition.y,
+      width: Math.round(window.innerWidth * scaleFactor),
+      height: Math.round(window.innerHeight * scaleFactor),
     }
   }
 
@@ -282,9 +315,10 @@ export function PetStage({
       }
 
       try {
-        const [cursor, hitboxBounds] = await Promise.all([
+        const [cursor, hitboxBounds, windowBounds] = await Promise.all([
           cursorPosition(),
           getHitboxBoundsPhysical(),
+          getWindowBoundsPhysical(),
         ])
 
         const insideHitbox =
@@ -292,8 +326,22 @@ export function PetStage({
           cursor.x <= hitboxBounds.right &&
           cursor.y >= hitboxBounds.top &&
           cursor.y <= hitboxBounds.bottom
+        const insideInteractiveRegion = interactiveRegions.some((region) => {
+          const left =
+            windowBounds.left + Math.round(windowBounds.width * region.leftRatio)
+          const top =
+            windowBounds.top + Math.round(windowBounds.height * region.topRatio)
+          const right = left + Math.round(windowBounds.width * region.widthRatio)
+          const bottom = top + Math.round(windowBounds.height * region.heightRatio)
+          return (
+            cursor.x >= left &&
+            cursor.x <= right &&
+            cursor.y >= top &&
+            cursor.y <= bottom
+          )
+        })
 
-        await setIgnoreCursorEventsSafely(!insideHitbox)
+        await setIgnoreCursorEventsSafely(!(insideHitbox || insideInteractiveRegion))
       } catch (error) {
         console.warn('Failed to evaluate pet hitbox click-through state.', error)
       }
@@ -309,7 +357,7 @@ export function PetStage({
       clearHitboxPollTimer()
       void setIgnoreCursorEventsSafely(false)
     }
-  }, [overlayInteractive, scale, showInteractionBounds])
+  }, [interactionHitbox.heightRatio, interactionHitbox.leftRatio, interactionHitbox.topRatio, interactionHitbox.widthRatio, interactiveRegions, overlayInteractive, scale, showInteractionBounds])
 
   useEffect(() => {
     desiredStateRef.current = state
@@ -467,7 +515,7 @@ export function PetStage({
         }
 
         layer.anchor.set(manifest.anchor.x, manifest.anchor.y)
-        layer.x = stageContainer.clientWidth * petConfig.layout.spriteAnchorXRatio
+        layer.x = stageContainer.clientWidth * characterAnchorXRatio
         layer.y = stageContainer.clientHeight - petConfig.layout.spriteBaselineOffset
         layer.scale.set(renderScale)
       }
@@ -537,7 +585,7 @@ export function PetStage({
             latestSprite.texture.height
           const configuredScale = petConfig.appearance.defaultScale || manifest.default_scale
           const renderScale = Math.min(configuredScale * scale, maxHeightScale)
-          const baseX = stageContainer.clientWidth * petConfig.layout.spriteAnchorXRatio
+          const baseX = stageContainer.clientWidth * characterAnchorXRatio
           const baseY = stageContainer.clientHeight - petConfig.layout.spriteBaselineOffset
           const stateNow = desiredStateRef.current
           const idleBehaviorNow = idleBehaviorRef.current
@@ -722,7 +770,7 @@ export function PetStage({
       appRef.current = null
       canvasContainer.replaceChildren()
     }
-  }, [manifest, onAssetStatusChange, scale])
+  }, [characterAnchorXRatio, manifest, onAssetStatusChange, scale])
 
   useEffect(() => {
     return () => {
@@ -759,6 +807,7 @@ export function PetStage({
     }
 
     event.preventDefault()
+    const currentTarget = event.currentTarget
     const currentWindow = getCurrentWindow()
     const [outerPosition, currentCursor] = await Promise.all([
       currentWindow.outerPosition(),
@@ -822,7 +871,9 @@ export function PetStage({
         }
       })()
     }, 16)
-    event.currentTarget.setPointerCapture(event.pointerId)
+    if (currentTarget.isConnected) {
+      currentTarget.setPointerCapture(event.pointerId)
+    }
   }
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -879,18 +930,16 @@ export function PetStage({
     onPetContextMenuRef.current?.(event.clientX, event.clientY)
   }
 
-  const hitbox = petConfig.interaction.hitbox
-
   return (
     <div ref={hostRef} className="pet-stage">
       <div ref={canvasHostRef} className="pet-stage__canvas" />
       <div
         className={`pet-hitbox${showInteractionBounds ? ' pet-hitbox--debug' : ''}`}
         style={{
-          left: `${hitbox.leftRatio * 100}%`,
-          top: `${hitbox.topRatio * 100}%`,
-          width: `${hitbox.widthRatio * 100}%`,
-          height: `${hitbox.heightRatio * 100}%`,
+          left: `${interactionHitbox.leftRatio * 100}%`,
+          top: `${interactionHitbox.topRatio * 100}%`,
+          width: `${interactionHitbox.widthRatio * 100}%`,
+          height: `${interactionHitbox.heightRatio * 100}%`,
         }}
         onContextMenu={handleContextMenu}
         onPointerCancel={handlePointerCancel}

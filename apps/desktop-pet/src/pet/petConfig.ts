@@ -6,11 +6,14 @@ export const petConfig = {
     minWindowWidth: 196,
     maxWindowWidth: 262,
     windowWidthRatio: 0.5,
+    mediumWindowWidth: 408,
+    longWindowWidth: 556,
     rightMargin: 28,
     bottomMargin: 30,
     spriteHeightRatio: 0.78,
     spriteBaselineOffset: 12,
     spriteAnchorXRatio: 0.76,
+    replyExpandedSpriteAnchorXRatio: 0.84,
   },
   appearance: {
     defaultScale: 0.14,
@@ -22,6 +25,29 @@ export const petConfig = {
   bubble: {
     maxWidth: 156,
     interactionDurationMs: 1700,
+    thresholds: {
+      shortMaxChars: 80,
+      shortMaxLines: 3,
+      mediumMaxChars: 220,
+      longLineThreshold: 6,
+      veryLongChars: 500,
+      previewChars: 300,
+    },
+    layout: {
+      shortMaxWidth: 156,
+      mediumMaxWidth: 232,
+      shortOffsetX: 10,
+      shortOffsetY: 54,
+      mediumOffsetX: 16,
+      mediumOffsetY: 18,
+      longPanelOffsetX: 12,
+      longPanelOffsetY: 18,
+      longPanelMinWidth: 296,
+      longPanelMaxWidth: 336,
+      longPanelMaxHeightPx: 420,
+      longPanelMaxHeightVh: 52,
+      longPanelRadius: 20,
+    },
   },
   interaction: {
     clickCooldownMs: 1200,
@@ -38,6 +64,12 @@ export const petConfig = {
       widthRatio: 0.44,
       heightRatio: 0.84,
     },
+    expandedHitbox: {
+      leftRatio: 0.64,
+      topRatio: 0.08,
+      widthRatio: 0.28,
+      heightRatio: 0.84,
+    },
   },
   debugSamples: {
     softIdle: '……只是稍微靠近一点而已。',
@@ -45,6 +77,12 @@ export const petConfig = {
     attention: '嗯？我有在听。',
     magic: '安静一点，魔术还没结束。',
     annoyed: '……别闹了。',
+    shortReply: '……嗯？',
+    mediumReply: '你今天回来得很晚，不过算了，先坐下吧。',
+    longReply:
+      '今天的风有点重，窗边那点光也一直在晃，所以我刚才顺手把桌上的纸页压好了。你如果真的累了，就先把包放下，坐一会儿，不用急着解释。水已经放在那边了，温度刚好，等你缓过来再慢慢说也不迟。我又不会因为你晚了一点就把门关上，只是下次记得提前告诉我，省得我还要一边看时间一边分神。',
+    veryLongReply:
+      '你既然已经回来了，就先别站在门口发呆。今天外面的风一直没停，连窗沿都被吹得发凉，我刚才顺手把窗扣重新压紧，还把桌上的书往里挪了一点。你看起来不像只是晚归那么简单，肩膀都绷着，呼吸也乱，我不想听你一边逞强一边说“没事”。先坐下，把手里的东西放开，杯子在左边，水是温的，慢一点喝。要是今天真的很累，就不用急着把事情一次性讲完，挑最重要的说就够了。你总是这样，明明已经疲惫得快撑不住了，还要把语气装得轻描淡写，好像只要自己不承认，麻烦就不会算在你头上。可人又不是机器，晚一点、累一点、乱一点，都是会留下痕迹的。你眼底的疲色那么明显，我又不是看不见。要是是工作上又出了反复的事，那就先把结论说给我听；要是是路上碰到让你心烦的人，那就直接骂两句也行，我不会拦着。总之你先把气喘匀，把肩膀放松下来，别一回来就继续硬撑。等你缓过来，我们再一点一点把今天收拾干净。灯我没有调太亮，桌面也替你留出来了，你只要坐过来就行。剩下那些乱七八糟的情绪，不管是烦、是累、还是委屈，慢慢交出来，我在这儿听着。',
   },
   idle: {
     postEventQuietMs: 2000,

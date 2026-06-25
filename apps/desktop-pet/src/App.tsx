@@ -4,7 +4,14 @@ import {
   currentMonitor,
   getCurrentWindow,
 } from '@tauri-apps/api/window'
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import './App.css'
 import {
   ParticleLayer,
@@ -24,6 +31,10 @@ import { loadManifest, type RenderablePetState } from './pet/manifest'
 import type { PetManifest } from './pet/manifest'
 import { petClickLines, petConfig, petDragLines } from './pet/petConfig'
 import {
+  resolveReplyDisplayMetrics,
+  type ReplyDisplayMode,
+} from './pet/replyDisplay'
+import {
   createIdleBehaviorPlan,
   randomIdleDelayMs,
   type IdleBehaviorName,
@@ -40,10 +51,24 @@ import {
   reducePetEvent,
   type PetControllerState,
 } from './pet/stateMachine'
+import runPageLogo from './assets/run-page-logo.jpg'
 
 interface ContextMenuState {
   x: number
   y: number
+}
+
+interface StatusNotice {
+  title: string
+  detail?: string
+  tone: 'info' | 'warning' | 'error'
+}
+
+interface InteractiveRegionRatio {
+  leftRatio: number
+  topRatio: number
+  widthRatio: number
+  heightRatio: number
 }
 
 const CONTEXT_MENU_WIDTH = 184
@@ -93,6 +118,105 @@ function isReasonableRestorePosition(
   )
 }
 
+function buildAssetNotice(
+  assetStatus: string,
+  runtimeMessage: string | null,
+): StatusNotice | null {
+  if (assetStatus === 'Loading manifest...') {
+    return {
+      title: '正在读取本地资源清单…',
+      detail: '桌宠启动时会先检查 manifest.json 和本地素材。',
+      tone: 'info',
+    }
+  }
+
+  if (assetStatus === 'Manifest load failed') {
+    if (runtimeMessage?.includes('Manifest request failed: 404')) {
+      return {
+        title: '未找到本地 manifest.json',
+        detail:
+          '请先运行 .\\tools\\import_alice_assets.ps1 -SourceDir "你的素材目录"。',
+        tone: 'error',
+      }
+    }
+
+    return {
+      title: '资源清单加载失败',
+      detail: runtimeMessage ?? '请检查 public/assets/alice/manifest.json 是否存在且格式正确。',
+      tone: 'error',
+    }
+  }
+
+  if (
+    assetStatus === 'Idle open texture missing' ||
+    assetStatus.startsWith('Asset load failed:')
+  ) {
+    return {
+      title: '本地素材缺失或路径不正确',
+      detail:
+        '请检查 public/assets/alice/skins/default_black 下必要素材是否存在，必要时重新运行导入脚本。',
+      tone: 'error',
+    }
+  }
+
+  return null
+}
+
+function buildSocketNotice(
+  manifest: PetManifest | null,
+  socketStatus: SocketConnectionStatus,
+): StatusNotice | null {
+  if (!manifest) {
+    return null
+  }
+
+  switch (socketStatus) {
+    case 'connecting':
+      return {
+        title: '正在连接 AstrBot bridge…',
+        detail: '如果长时间未连接，请确认本机 127.0.0.1:17321 已启动。',
+        tone: 'info',
+      }
+    case 'disconnected':
+      return {
+        title: 'Bridge 已断开，正在自动重连…',
+        detail: '请确认 AstrBot bridge 正在监听 127.0.0.1:17321。',
+        tone: 'warning',
+      }
+    case 'error':
+      return {
+        title: 'Bridge 连接失败，正在继续重试…',
+        detail: '桌宠不会崩溃。请检查 AstrBot bridge 或端口 17321 是否被占用。',
+        tone: 'warning',
+      }
+    case 'connected':
+    default:
+      return null
+  }
+}
+
+function clampWindowPosition(
+  position: PetWindowPosition,
+  bounds: {
+    screenX: number
+    screenY: number
+    screenWidth: number
+    screenHeight: number
+    windowWidth: number
+    windowHeight: number
+  },
+) {
+  const minX = Math.round(bounds.screenX)
+  const maxX = Math.round(bounds.screenX + bounds.screenWidth - bounds.windowWidth)
+  const minY = Math.round(bounds.screenY)
+  const maxY = Math.round(bounds.screenY + bounds.screenHeight - bounds.windowHeight)
+
+  return {
+    x: Math.max(minX, Math.min(position.x, maxX)),
+    y: Math.max(minY, Math.min(position.y, maxY)),
+  }
+}
+
 function App() {
   const initialSettingsRef = useRef<PetLocalSettings>(loadPetLocalSettings())
   const initialSettings = initialSettingsRef.current
@@ -126,6 +250,8 @@ function App() {
   const [idleBehaviorNextLabel, setIdleBehaviorNextLabel] = useState('未调度')
   const [idleScheduleRevision, setIdleScheduleRevision] = useState(0)
   const [particleBursts, setParticleBursts] = useState<ParticleBurst[]>([])
+  const [speechBubbleInteractiveRegion, setSpeechBubbleInteractiveRegion] =
+    useState<InteractiveRegionRatio | null>(null)
 
   const manifestRef = useRef<PetManifest | null>(null)
   const controllerStateRef = useRef<PetControllerState | null>(null)
@@ -147,6 +273,30 @@ function App() {
     initialSettings.windowPosition,
   )
   const windowLayoutReadyRef = useRef(false)
+
+  const activeBubble = transientBubble ?? controllerState?.bubble ?? null
+  const activeBubbleMetrics = useMemo(
+    () =>
+      activeBubble
+        ? resolveReplyDisplayMetrics(activeBubble.text, petConfig.bubble.thresholds)
+        : null,
+    [activeBubble],
+  )
+  const replyDisplayMode =
+    activeBubbleMetrics?.mode ??
+    (speechBubbleInteractiveRegion ? 'long' : 'short')
+  const characterAnchorXRatio =
+    replyDisplayMode === 'short'
+      ? petConfig.layout.spriteAnchorXRatio
+      : petConfig.layout.replyExpandedSpriteAnchorXRatio
+  const interactionHitbox =
+    replyDisplayMode === 'short'
+      ? petConfig.interaction.hitbox
+      : petConfig.interaction.expandedHitbox
+  const interactiveRegions = useMemo(
+    () => (speechBubbleInteractiveRegion ? [speechBubbleInteractiveRegion] : []),
+    [speechBubbleInteractiveRegion],
+  )
 
   const clearSettleTimer = () => {
     if (settleTimerRef.current !== null) {
@@ -247,6 +397,7 @@ function App() {
       nextScale: PetScaleOption,
       options?: {
         resetToDefault?: boolean
+        replyDisplayMode?: ReplyDisplayMode
       },
     ) => {
       try {
@@ -263,7 +414,7 @@ function App() {
         const nextHeight = Math.round(
           screenHeight * petConfig.layout.screenHeightRatio * nextScale,
         )
-        const nextWidth = Math.round(
+        const compactWidth = Math.round(
           Math.min(
             petConfig.layout.maxWindowWidth * nextScale,
             Math.max(
@@ -272,6 +423,20 @@ function App() {
             ),
           ),
         )
+        const replyDisplayMode = options?.replyDisplayMode ?? 'short'
+        const nextWidth =
+          replyDisplayMode === 'long'
+            ? Math.round(
+                Math.max(compactWidth, petConfig.layout.longWindowWidth * nextScale),
+              )
+            : replyDisplayMode === 'medium'
+              ? Math.round(
+                  Math.max(
+                    compactWidth,
+                    petConfig.layout.mediumWindowWidth * nextScale,
+                  ),
+                )
+              : compactWidth
         const defaultPosition = {
           x: Math.round(
             screenX + screenWidth - nextWidth - petConfig.layout.rightMargin,
@@ -291,11 +456,46 @@ function App() {
             windowHeight: nextHeight,
           },
         )
-        const targetPosition: PetWindowPosition =
-          options?.resetToDefault || !canRestoreSavedPosition
-            ? defaultPosition
-            : (savedWindowPositionRef.current ?? defaultPosition)
         const currentWindow = getCurrentWindow()
+        let targetPosition: PetWindowPosition
+
+        if (windowLayoutReadyRef.current && !options?.resetToDefault) {
+          const [windowScaleFactor, outerPosition, outerSize] = await Promise.all([
+            currentWindow.scaleFactor(),
+            currentWindow.outerPosition(),
+            currentWindow.outerSize(),
+          ])
+          const logicalX = outerPosition.x / windowScaleFactor
+          const logicalY = outerPosition.y / windowScaleFactor
+          const logicalWidth = outerSize.width / windowScaleFactor
+          const logicalHeight = outerSize.height / windowScaleFactor
+          targetPosition = clampWindowPosition(
+            {
+              x: Math.round(logicalX + logicalWidth - nextWidth),
+              y: Math.round(logicalY + logicalHeight - nextHeight),
+            },
+            {
+              screenX,
+              screenY,
+              screenWidth,
+              screenHeight,
+              windowWidth: nextWidth,
+              windowHeight: nextHeight,
+            },
+          )
+        } else {
+          targetPosition =
+            options?.resetToDefault || !canRestoreSavedPosition
+              ? defaultPosition
+              : clampWindowPosition(savedWindowPositionRef.current ?? defaultPosition, {
+                  screenX,
+                  screenY,
+                  screenWidth,
+                  screenHeight,
+                  windowWidth: nextWidth,
+                  windowHeight: nextHeight,
+                })
+        }
 
         await currentWindow.setSize(new LogicalSize(nextWidth, nextHeight))
         await currentWindow.setPosition(
@@ -484,6 +684,7 @@ function App() {
     async function initWindowBehavior() {
       await applyWindowLayout(uiScaleRef.current, {
         resetToDefault: savedWindowPositionRef.current === null,
+        replyDisplayMode,
       })
       if (cancelled) {
         return
@@ -507,15 +708,15 @@ function App() {
       }
       clearPositionPersistTimer()
     }
-  }, [applyWindowLayout, saveWindowPositionFromPhysical])
+  }, [applyWindowLayout, replyDisplayMode, saveWindowPositionFromPhysical])
 
   useEffect(() => {
     if (!windowLayoutReadyRef.current) {
       return
     }
 
-    void applyWindowLayout(uiScale)
-  }, [applyWindowLayout, uiScale])
+    void applyWindowLayout(uiScale, { replyDisplayMode })
+  }, [applyWindowLayout, replyDisplayMode, uiScale])
 
   useEffect(() => {
     if (!manifest) {
@@ -666,11 +867,11 @@ function App() {
     })
   }
 
-  const handleSimulateNeutralReply = () => {
+  const handleSimulateShortReply = () => {
     spawnParticles('star', 2)
     processPetEvent({
       type: 'assistant_reply',
-      text: '欢迎回来。今天看起来还算顺利。',
+      text: petConfig.debugSamples.shortReply,
       emotion: 'neutral',
       source: 'debug',
       session_id: 'default',
@@ -678,12 +879,36 @@ function App() {
     })
   }
 
-  const handleSimulateColdReply = () => {
-    spawnParticles('sparkle', 2)
+  const handleSimulateMediumReply = () => {
+    spawnParticles('star', 2)
     processPetEvent({
       type: 'assistant_reply',
-      text: '……你今天回来得很晚。',
-      emotion: 'cold',
+      text: petConfig.debugSamples.mediumReply,
+      emotion: 'cold_soft',
+      source: 'debug',
+      session_id: 'default',
+      timestamp: Date.now(),
+    })
+  }
+
+  const handleSimulateLongReply = () => {
+    spawnParticles('magic', 1)
+    processPetEvent({
+      type: 'assistant_reply',
+      text: petConfig.debugSamples.longReply,
+      emotion: 'gentle',
+      source: 'debug',
+      session_id: 'default',
+      timestamp: Date.now(),
+    })
+  }
+
+  const handleSimulateVeryLongReply = () => {
+    spawnParticles('magic', 2)
+    processPetEvent({
+      type: 'assistant_reply',
+      text: petConfig.debugSamples.veryLongReply,
+      emotion: 'thinking',
       source: 'debug',
       session_id: 'default',
       timestamp: Date.now(),
@@ -887,13 +1112,27 @@ function App() {
     .replace(/^Loaded (\d+) textures$/, '已加载 $1 张贴图')
     .replace(/^Asset load failed: /, '贴图加载失败：')
 
+  const assetNotice = buildAssetNotice(assetStatus, runtimeMessage)
+  const socketNotice = buildSocketNotice(manifest, socketStatus)
+  const loadingNotice = !manifest ? assetNotice : null
+  const floatingNotice = manifest ? assetNotice ?? socketNotice : null
+  const loadingStatusTitle = loadingNotice?.title ?? '正在等待资源清单…'
+  const loadingStatusDetail =
+    loadingNotice?.detail ?? '桌宠会在本地素材和 AstrBot bridge 就绪后自动进入运行状态。'
+
   return (
     <main
       className={`app-shell${debugPanelOpen ? ' app-shell--debug-bounds' : ''}`}
       style={
         {
-          '--bubble-max-width': `${petConfig.bubble.maxWidth * uiScale}px`,
-          '--ui-scale': `${uiScale}`,
+          '--bubble-max-width': `${petConfig.bubble.layout.shortMaxWidth * uiScale}px`,
+          '--bubble-medium-max-width': `${petConfig.bubble.layout.mediumMaxWidth * uiScale}px`,
+          '--reply-panel-width': `${petConfig.bubble.layout.longPanelMaxWidth * uiScale}px`,
+          '--reply-panel-min-width': `${petConfig.bubble.layout.longPanelMinWidth * uiScale}px`,
+          '--reply-panel-max-height': `min(${petConfig.bubble.layout.longPanelMaxHeightVh}vh, ${
+            petConfig.bubble.layout.longPanelMaxHeightPx * uiScale
+          }px)`,
+        '--ui-scale': `${uiScale}`,
         } as CSSProperties
       }
     >
@@ -950,11 +1189,17 @@ function App() {
             <button type="button" onClick={handleSimulateThinking}>
               模拟思考
             </button>
-            <button type="button" onClick={handleSimulateNeutralReply}>
-              模拟普通回复
+            <button type="button" onClick={handleSimulateShortReply}>
+              Simulate short reply
             </button>
-            <button type="button" onClick={handleSimulateColdReply}>
-              模拟冷淡回复
+            <button type="button" onClick={handleSimulateMediumReply}>
+              Simulate medium reply
+            </button>
+            <button type="button" onClick={handleSimulateLongReply}>
+              Simulate long reply
+            </button>
+            <button type="button" onClick={handleSimulateVeryLongReply}>
+              Simulate very long reply
             </button>
             <button
               type="button"
@@ -1084,14 +1329,19 @@ function App() {
               scale={uiScale}
             />
             <SpeechBubble
-              bubble={transientBubble ?? controllerState.bubble}
+              bubble={activeBubble}
+              metrics={activeBubbleMetrics}
               scale={uiScale}
               debugVisible={debugPanelOpen}
+              onInteractiveRegionChange={setSpeechBubbleInteractiveRegion}
             />
             <PetStage
               manifest={manifest}
               state={interactionVisualState ?? controllerState.visualState}
               scale={uiScale}
+              characterAnchorXRatio={characterAnchorXRatio}
+              interactionHitbox={interactionHitbox}
+              interactiveRegions={interactiveRegions}
               idleBehavior={idleBehaviorName}
               overlayInteractive={debugPanelOpen || contextMenu !== null}
               showInteractionBounds={debugPanelOpen}
@@ -1109,9 +1359,41 @@ function App() {
                 spawnParticles(kind, kind === 'magic' ? 2 : 1)
               }}
             />
+            {floatingNotice ? (
+              <div
+                className={`status-banner status-banner--${floatingNotice.tone}`}
+              >
+                <strong>{floatingNotice.title}</strong>
+                {floatingNotice.detail ? <span>{floatingNotice.detail}</span> : null}
+              </div>
+            ) : null}
           </>
         ) : (
-          <div className="loading-copy">正在等待资源清单...</div>
+          <div className="loading-screen">
+            <div
+              className={`loading-copy${loadingNotice ? ' loading-copy--panel' : ''}`}
+            >
+              <div className="loading-brand">
+                <div className="loading-brand__media">
+                  <img src={runPageLogo} alt="Yuzhu desktop pet logo" />
+                </div>
+                <div className="loading-brand__copy">
+                  <span className="loading-brand__eyebrow">Yuzhu Desktop Pet</span>
+                  <strong>本地运行中</strong>
+                  <p>桌宠、素材清单与 AstrBot bridge 正在对齐启动状态。</p>
+                </div>
+              </div>
+
+              <div className="loading-status-card">
+                <strong>{loadingStatusTitle}</strong>
+                <span>{loadingStatusDetail}</span>
+                <div className="loading-status-meta">
+                  <span>资源：{assetStatusLabel}</span>
+                  <span>连接：{socketStatusLabelMap[socketStatus]}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </section>
     </main>
