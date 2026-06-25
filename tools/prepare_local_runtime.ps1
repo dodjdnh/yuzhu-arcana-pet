@@ -35,6 +35,7 @@ $runtimeRootPath = if ([System.IO.Path]::IsPathRooted($RuntimeRoot)) {
 $runtimeDataPath = Join-Path $runtimeRootPath 'data'
 $runtimePluginsPath = Join-Path $runtimeDataPath 'plugins'
 $runtimeKnowledgeBasePath = Join-Path $runtimeDataPath 'knowledge_base'
+$desktopPetRepoRoot = Split-Path -Parent $runtimeRootPath
 $sourceDataPath = Join-Path $labRoot 'server_sync\data'
 $workspaceConfigRoot = if ([string]::IsNullOrWhiteSpace($ExternalConfigRoot)) {
     Join-Path $workspaceRoot 'astrbot_local_config'
@@ -89,6 +90,16 @@ foreach ($plugin in $overlayPlugins) {
         }
         Copy-Item -Path $sourcePlugin -Destination $targetPlugin -Recurse -Force
     }
+}
+
+$desktopPetBridgeSource = Join-Path $desktopPetRepoRoot 'plugins\astrbot_plugin_desktop_pet_bridge'
+$desktopPetBridgeTarget = Join-Path $runtimePluginsPath 'astrbot_plugin_desktop_pet_bridge'
+if (Test-Path $desktopPetBridgeSource) {
+    Write-Host '[runtime] overlay plugin: astrbot_plugin_desktop_pet_bridge'
+    if (Test-Path $desktopPetBridgeTarget) {
+        Remove-Item -Recurse -Force $desktopPetBridgeTarget
+    }
+    Copy-Item -Path $desktopPetBridgeSource -Destination $desktopPetBridgeTarget -Recurse -Force
 }
 
 $cmdConfigPath = Join-Path $runtimeDataPath 'cmd_config.json'
@@ -178,4 +189,4 @@ Write-Host "[runtime] all platforms disabled: $DisablePlatforms"
 if ($EnabledPlatforms.Count -gt 0) {
     Write-Host "[runtime] explicitly enabled platforms: $($EnabledPlatforms -join ', ')"
 }
-Write-Host "[runtime] data/plugins includes AIRI overlay plugins"
+Write-Host "[runtime] data/plugins includes AIRI overlay plugins and desktop pet bridge"
