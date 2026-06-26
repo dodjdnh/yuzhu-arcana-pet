@@ -13,6 +13,23 @@ interface SpeechBubbleProps {
   metrics: ReplyDisplayMetrics | null
   scale?: number
   debugVisible?: boolean
+  placement?: {
+    anchor: 'left' | 'right'
+    leftPx: number
+    topPx: number
+    widthPx: number
+    leftSpace: number
+    rightSpace: number
+  } | null
+  onMeasuredSizeChange?: (
+    size:
+      | {
+          mode: ReplyDisplayMetrics['mode']
+          width: number
+          height: number
+        }
+      | null,
+  ) => void
   onInteractiveRegionChange?: (
     region:
       | {
@@ -30,6 +47,8 @@ export function SpeechBubble({
   metrics,
   scale = 1,
   debugVisible = false,
+  placement = null,
+  onMeasuredSizeChange,
   onInteractiveRegionChange,
 }: SpeechBubbleProps) {
   const [visibleBubble, setVisibleBubble] = useState<SpeechBubbleState | null>(bubble)
@@ -74,6 +93,41 @@ export function SpeechBubble({
   useEffect(() => {
     setExpanded(false)
   }, [bubble?.text])
+
+  useEffect(() => {
+    if (!visibleBubble || !visibleMetrics || !bubbleRef.current) {
+      onMeasuredSizeChange?.(null)
+      return
+    }
+
+    const node = bubbleRef.current
+    const reportSize = () => {
+      const rect = node.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        onMeasuredSizeChange?.(null)
+        return
+      }
+
+      onMeasuredSizeChange?.({
+        mode: visibleMetrics.mode,
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      })
+    }
+
+    reportSize()
+    const resizeObserver = new ResizeObserver(() => {
+      reportSize()
+    })
+    resizeObserver.observe(node)
+    window.addEventListener('resize', reportSize)
+
+    return () => {
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', reportSize)
+      onMeasuredSizeChange?.(null)
+    }
+  }, [expanded, onMeasuredSizeChange, visibleBubble, visibleMetrics])
 
   useEffect(() => {
     if (!visibleBubble || visibleMetrics?.mode !== 'long' || !bubbleRef.current) {
@@ -129,15 +183,28 @@ export function SpeechBubble({
 
   const mode = visibleMetrics?.mode ?? 'short'
   const isInteractiveLongPanel = mode === 'long'
+  const anchor = placement?.anchor ?? 'left'
 
   return (
     <div
       ref={bubbleRef}
       className={`speech-bubble speech-bubble--${visibleBubble.tone} speech-bubble--${mode}${
         closing ? ' speech-bubble--closing' : ''
-      }${debugVisible ? ' speech-bubble--debug' : ''}`}
-      style={{ '--bubble-scale': scale } as CSSProperties}
+      } speech-bubble--anchor-${anchor}${debugVisible ? ' speech-bubble--debug' : ''}`}
+      style={
+        {
+          '--bubble-scale': scale,
+          '--bubble-left': placement ? `${placement.leftPx}px` : undefined,
+          '--bubble-top': placement ? `${placement.topPx}px` : undefined,
+          '--bubble-placement-width': placement ? `${placement.widthPx}px` : undefined,
+        } as CSSProperties
+      }
     >
+      {debugVisible && placement ? (
+        <span className="speech-bubble__debug-label">
+          {anchor} L:{placement.leftSpace} R:{placement.rightSpace}
+        </span>
+      ) : null}
       {mode !== 'long' ? (
         <>
           <span className="speech-bubble__star speech-bubble__star--one">✦</span>

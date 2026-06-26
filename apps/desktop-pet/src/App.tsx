@@ -71,6 +71,32 @@ interface InteractiveRegionRatio {
   heightRatio: number
 }
 
+interface WindowLayoutSnapshot {
+  x: number
+  y: number
+  width: number
+  height: number
+  screenX: number
+  screenY: number
+  screenWidth: number
+  screenHeight: number
+}
+
+interface BubblePlacementInfo {
+  anchor: 'left' | 'right'
+  leftPx: number
+  topPx: number
+  widthPx: number
+  leftSpace: number
+  rightSpace: number
+}
+
+interface BubbleMeasuredSize {
+  mode: ReplyDisplayMode
+  width: number
+  height: number
+}
+
 const CONTEXT_MENU_WIDTH = 184
 const CONTEXT_MENU_HEIGHT = 260
 const CONTEXT_MENU_MARGIN = 12
@@ -217,6 +243,10 @@ function clampWindowPosition(
   }
 }
 
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max))
+}
+
 function App() {
   const initialSettingsRef = useRef<PetLocalSettings>(loadPetLocalSettings())
   const initialSettings = initialSettingsRef.current
@@ -252,6 +282,10 @@ function App() {
   const [particleBursts, setParticleBursts] = useState<ParticleBurst[]>([])
   const [speechBubbleInteractiveRegion, setSpeechBubbleInteractiveRegion] =
     useState<InteractiveRegionRatio | null>(null)
+  const [windowLayoutSnapshot, setWindowLayoutSnapshot] =
+    useState<WindowLayoutSnapshot | null>(null)
+  const [bubbleMeasuredSize, setBubbleMeasuredSize] =
+    useState<BubbleMeasuredSize | null>(null)
 
   const manifestRef = useRef<PetManifest | null>(null)
   const controllerStateRef = useRef<PetControllerState | null>(null)
@@ -285,6 +319,7 @@ function App() {
   const replyDisplayMode =
     activeBubbleMetrics?.mode ??
     (speechBubbleInteractiveRegion ? 'long' : 'short')
+  const hasActiveBubble = activeBubble !== null
   const characterAnchorXRatio =
     replyDisplayMode === 'short'
       ? petConfig.layout.spriteAnchorXRatio
@@ -297,6 +332,122 @@ function App() {
     () => (speechBubbleInteractiveRegion ? [speechBubbleInteractiveRegion] : []),
     [speechBubbleInteractiveRegion],
   )
+
+  const estimateBubbleWidth = useCallback(
+    (mode: ReplyDisplayMode) => {
+      const layout = petConfig.bubble.layout
+      const desired =
+        mode === 'long'
+          ? layout.longPanelMaxWidth
+          : mode === 'medium'
+            ? layout.mediumMaxWidth
+            : layout.shortMaxWidth
+
+      return Math.round(desired * uiScale)
+    },
+    [uiScale],
+  )
+
+  const bubblePlacement = useMemo<BubblePlacementInfo | null>(() => {
+    if (!activeBubbleMetrics || !windowLayoutSnapshot) {
+      return null
+    }
+
+    const mode = activeBubbleMetrics.mode
+    const layout = petConfig.bubble.layout
+    const edgePadding = layout.screenEdgePadding
+    const safeMargin = layout.bubbleSafeMargin
+    const sideGap = Math.round(layout.sideGap * uiScale)
+    const windowWidth = windowLayoutSnapshot.width
+    const windowHeight = windowLayoutSnapshot.height
+    const hitboxLeft = windowWidth * interactionHitbox.leftRatio
+    const hitboxRight =
+      windowWidth * (interactionHitbox.leftRatio + interactionHitbox.widthRatio)
+    const hitboxTop = windowHeight * interactionHitbox.topRatio
+    const leftSpace =
+      windowLayoutSnapshot.x +
+      hitboxLeft -
+      windowLayoutSnapshot.screenX
+    const rightSpace =
+      windowLayoutSnapshot.screenX +
+      windowLayoutSnapshot.screenWidth -
+      (windowLayoutSnapshot.x + hitboxRight)
+    const measuredWidth =
+      bubbleMeasuredSize?.mode === mode ? bubbleMeasuredSize.width : null
+    const measuredHeight =
+      bubbleMeasuredSize?.mode === mode ? bubbleMeasuredSize.height : null
+    const desiredWidth = measuredWidth ?? estimateBubbleWidth(mode)
+    const maxWidthWithinWindow = Math.max(
+      96,
+      windowWidth - edgePadding * 2,
+    )
+    const widthPx = Math.min(desiredWidth, maxWidthWithinWindow)
+    const rightFits = rightSpace >= widthPx + safeMargin
+    const leftFits = leftSpace >= widthPx + safeMargin
+    let anchor: BubblePlacementInfo['anchor']
+
+    if (mode === 'long') {
+      if (leftFits) {
+        anchor = 'left'
+      } else if (rightFits) {
+        anchor = 'right'
+      } else {
+        anchor = leftSpace >= rightSpace ? 'left' : 'right'
+      }
+    } else if (rightFits) {
+      anchor = 'right'
+    } else if (leftFits) {
+      anchor = 'left'
+    } else {
+      anchor = rightSpace >= leftSpace ? 'right' : 'left'
+    }
+
+    const unclampedLeft =
+      anchor === 'right'
+        ? hitboxRight + sideGap
+        : hitboxLeft - sideGap - widthPx
+    const leftPx = clampNumber(
+      Math.round(unclampedLeft),
+      edgePadding,
+      Math.max(edgePadding, windowWidth - widthPx - edgePadding),
+    )
+    const offsetY =
+      mode === 'long'
+        ? layout.longPanelOffsetY
+        : mode === 'medium'
+          ? layout.mediumOffsetY
+          : layout.shortOffsetY
+    const estimatedHeight =
+      measuredHeight ??
+      (mode === 'long'
+        ? Math.min(layout.longPanelMaxHeightPx * uiScale, windowHeight * 0.52)
+        : mode === 'medium'
+          ? 142 * uiScale
+          : 76 * uiScale)
+    const topPx = clampNumber(
+      Math.round(mode === 'short' ? hitboxTop + offsetY * uiScale : offsetY * uiScale),
+      edgePadding,
+      Math.max(edgePadding, windowHeight - estimatedHeight - edgePadding),
+    )
+
+    return {
+      anchor,
+      leftPx,
+      topPx,
+      widthPx,
+      leftSpace: Math.round(leftSpace),
+      rightSpace: Math.round(rightSpace),
+    }
+  }, [
+    activeBubbleMetrics,
+    estimateBubbleWidth,
+    bubbleMeasuredSize,
+    interactionHitbox.leftRatio,
+    interactionHitbox.topRatio,
+    interactionHitbox.widthRatio,
+    uiScale,
+    windowLayoutSnapshot,
+  ])
 
   const clearSettleTimer = () => {
     if (settleTimerRef.current !== null) {
@@ -382,6 +533,34 @@ function App() {
     [persistWindowPosition],
   )
 
+  const refreshWindowLayoutSnapshot = useCallback(async () => {
+    try {
+      const currentWindow = getCurrentWindow()
+      const [monitor, windowScaleFactor, outerPosition] = await Promise.all([
+        currentMonitor(),
+        currentWindow.scaleFactor(),
+        currentWindow.outerPosition(),
+      ])
+      if (!monitor) {
+        return
+      }
+
+      const monitorScaleFactor = monitor.scaleFactor || windowScaleFactor || 1
+      setWindowLayoutSnapshot({
+        x: Math.round(outerPosition.x / windowScaleFactor),
+        y: Math.round(outerPosition.y / windowScaleFactor),
+        width: Math.round(window.innerWidth),
+        height: Math.round(window.innerHeight),
+        screenX: Math.round(monitor.position.x / monitorScaleFactor),
+        screenY: Math.round(monitor.position.y / monitorScaleFactor),
+        screenWidth: Math.round(monitor.size.width / monitorScaleFactor),
+        screenHeight: Math.round(monitor.size.height / monitorScaleFactor),
+      })
+    } catch (error) {
+      console.warn('Failed to refresh desktop pet window snapshot.', error)
+    }
+  }, [])
+
   const persistCurrentWindowPosition = useCallback(async () => {
     try {
       const currentWindow = getCurrentWindow()
@@ -398,6 +577,7 @@ function App() {
       options?: {
         resetToDefault?: boolean
         replyDisplayMode?: ReplyDisplayMode
+        hasBubble?: boolean
       },
     ) => {
       try {
@@ -424,6 +604,7 @@ function App() {
           ),
         )
         const replyDisplayMode = options?.replyDisplayMode ?? 'short'
+        const hasBubble = options?.hasBubble ?? false
         const nextWidth =
           replyDisplayMode === 'long'
             ? Math.round(
@@ -436,7 +617,14 @@ function App() {
                     petConfig.layout.mediumWindowWidth * nextScale,
                   ),
                 )
-              : compactWidth
+              : hasBubble
+                ? Math.round(
+                    Math.max(
+                      compactWidth,
+                      petConfig.layout.shortBubbleWindowWidth * nextScale,
+                    ),
+                  )
+                : compactWidth
         const defaultPosition = {
           x: Math.round(
             screenX + screenWidth - nextWidth - petConfig.layout.rightMargin,
@@ -501,6 +689,7 @@ function App() {
         await currentWindow.setPosition(
           new LogicalPosition(targetPosition.x, targetPosition.y),
         )
+        await refreshWindowLayoutSnapshot()
 
         if (options?.resetToDefault || !canRestoreSavedPosition) {
           persistWindowPosition(targetPosition)
@@ -509,7 +698,7 @@ function App() {
         console.warn('Failed to apply desktop pet window layout.', error)
       }
     },
-    [persistWindowPosition],
+    [persistWindowPosition, refreshWindowLayoutSnapshot],
   )
 
   const resetWindowPosition = useCallback(async () => {
@@ -679,23 +868,30 @@ function App() {
 
   useEffect(() => {
     let cancelled = false
-    let unlisten: (() => void) | null = null
+    let unlistenMoved: (() => void) | null = null
+    let unlistenResized: (() => void) | null = null
 
     async function initWindowBehavior() {
       await applyWindowLayout(uiScaleRef.current, {
         resetToDefault: savedWindowPositionRef.current === null,
         replyDisplayMode,
+        hasBubble: hasActiveBubble,
       })
       if (cancelled) {
         return
       }
 
       windowLayoutReadyRef.current = true
-      unlisten = await getCurrentWindow().onMoved(({ payload }) => {
+      const currentWindow = getCurrentWindow()
+      unlistenMoved = await currentWindow.onMoved(({ payload }) => {
+        void refreshWindowLayoutSnapshot()
         clearPositionPersistTimer()
         positionPersistTimerRef.current = window.setTimeout(() => {
           void saveWindowPositionFromPhysical(payload.x, payload.y)
         }, POSITION_SAVE_DEBOUNCE_MS)
+      })
+      unlistenResized = await currentWindow.onResized(() => {
+        void refreshWindowLayoutSnapshot()
       })
     }
 
@@ -703,20 +899,29 @@ function App() {
 
     return () => {
       cancelled = true
-      if (unlisten) {
-        unlisten()
+      if (unlistenMoved) {
+        unlistenMoved()
+      }
+      if (unlistenResized) {
+        unlistenResized()
       }
       clearPositionPersistTimer()
     }
-  }, [applyWindowLayout, replyDisplayMode, saveWindowPositionFromPhysical])
+  }, [
+    applyWindowLayout,
+    hasActiveBubble,
+    refreshWindowLayoutSnapshot,
+    replyDisplayMode,
+    saveWindowPositionFromPhysical,
+  ])
 
   useEffect(() => {
     if (!windowLayoutReadyRef.current) {
       return
     }
 
-    void applyWindowLayout(uiScale, { replyDisplayMode })
-  }, [applyWindowLayout, replyDisplayMode, uiScale])
+    void applyWindowLayout(uiScale, { replyDisplayMode, hasBubble: hasActiveBubble })
+  }, [applyWindowLayout, hasActiveBubble, replyDisplayMode, uiScale])
 
   useEffect(() => {
     if (!manifest) {
@@ -1183,6 +1388,14 @@ function App() {
             <span className="label">粒子</span>
             <span className="value">{particleEnabled ? '开启' : '关闭'}</span>
           </p>
+          <p>
+            <span className="label">气泡</span>
+            <span className="value">
+              {bubblePlacement
+                ? `${bubblePlacement.anchor} L:${bubblePlacement.leftSpace} R:${bubblePlacement.rightSpace}`
+                : '无'}
+            </span>
+          </p>
           <p className="hint">左键互动，拖拽移动，右键打开日常菜单。</p>
 
           <div className="debug-actions">
@@ -1333,6 +1546,8 @@ function App() {
               metrics={activeBubbleMetrics}
               scale={uiScale}
               debugVisible={debugPanelOpen}
+              placement={bubblePlacement}
+              onMeasuredSizeChange={setBubbleMeasuredSize}
               onInteractiveRegionChange={setSpeechBubbleInteractiveRegion}
             />
             <PetStage
